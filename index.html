@@ -1,0 +1,2356 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Logiciel de Gestion Magasin Complet</title>
+    <script>
+    /* === Diagnostic de stockage : avertit si les données ne peuvent pas être sauvegardées === */
+    (function () {
+        function banniere(msg) {
+            function ajouter() {
+                var d = document.getElementById('alerte-stockage');
+                if (!d) {
+                    d = document.createElement('div');
+                    d.id = 'alerte-stockage';
+                    d.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#b91c1c;color:#fff;padding:10px 14px;font:bold 13px Arial,sans-serif;text-align:center;';
+                    document.body.appendChild(d);
+                }
+                d.textContent = msg;
+            }
+            if (document.body) ajouter(); else document.addEventListener('DOMContentLoaded', ajouter);
+        }
+        var ok = true;
+        try { localStorage.setItem('__test', '1'); localStorage.removeItem('__test'); } catch (e) { ok = false; }
+        if (!ok) {
+            var mem = {};
+            try {
+                Object.defineProperty(window, 'localStorage', { configurable: true, value: {
+                    getItem: function (k) { return Object.prototype.hasOwnProperty.call(mem, k) ? mem[k] : null; },
+                    setItem: function (k, v) { mem[k] = String(v); },
+                    removeItem: function (k) { delete mem[k]; },
+                    key: function (i) { return Object.keys(mem)[i] || null; },
+                    get length() { return Object.keys(mem).length; }
+                }});
+            } catch (e) {}
+            banniere("⚠️ Sauvegarde impossible ici : le navigateur bloque le stockage (navigation privée, aperçu intégré ou fichier ouvert depuis une application). Les données seront perdues à la fermeture. Ouvrez le fichier directement dans Chrome/Safari.");
+        } else {
+            var original = Storage.prototype.setItem;
+            Storage.prototype.setItem = function (k, v) {
+                try { return original.call(this, k, v); }
+                catch (e) { banniere("⚠️ Stockage plein : les dernières données NE SONT PAS sauvegardées. Retirez la photo du CV ou supprimez des CV archivés, puis utilisez « Exporter ». (" + k + ")"); }
+            };
+        }
+    })();
+    </script>
+
+    <!-- Vue.js, Tailwind CSS, html2pdf et Chart.js -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        .hover-scale { transition: transform 0.2s; }
+        .hover-scale:hover { transform: scale(1.03); }
+        
+        /* Cacher la flèche native des détails pour l'accordéon */
+        details > summary { list-style: none; outline: none; }
+        details > summary::-webkit-details-marker { display: none; }
+
+        :root { --print-width: 210mm; --print-min-height: 297mm; }
+        
+        /* Layout Facture/CV - Mobile First */
+        .facture-layout { display: flex; flex-direction: column; width: 100%; }
+        .facture-sidebar { width: 100%; background: white; padding: 15px; border-bottom: 2px solid #e5e7eb; }
+        .facture-content { width: 100%; padding: 10px; overflow-x: auto; background-color: #f3f4f6; }
+        
+        /* Layout Facture/CV - Desktop */
+        @media (min-width: 1024px) {
+            .facture-layout { flex-direction: row; }
+            .facture-sidebar { width: 350px; height: calc(100vh - 64px); overflow-y: auto; position: fixed; left: 0; top: 64px; box-shadow: 2px 0 5px rgba(0,0,0,0.1); border-bottom: none; }
+            .facture-content { margin-left: 350px; width: calc(100% - 350px); padding: 40px; display: flex; justify-content: center; }
+        }
+
+        .facture-sidebar h2 { font-size: 18px; margin-bottom: 15px; border-bottom: 2px solid #333; padding-bottom: 5px; margin-top: 15px; }
+        .form-group { margin-bottom: 12px; }
+        .form-group label { display: block; font-size: 12px; font-weight: bold; margin-bottom: 5px; color: #555; }
+        .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 10px 8px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
+        .form-group select:disabled { background-color: #f3f4f6; cursor: not-allowed; }
+        
+        .btn-custom { background: #1a73e8; color: white; border: none; padding: 12px 15px; cursor: pointer; border-radius: 6px; font-weight: bold; width: 100%; margin-bottom: 10px; text-align: center; }
+        .btn-custom:hover { background: #1557b0; }
+        .btn-red { background: #e53e3e; }
+        .btn-red:hover { background: #c53030; }
+        
+        .facture-page { 
+            width: var(--print-width); 
+            min-width: var(--print-width);
+            min-height: var(--print-min-height); 
+            background: white; 
+            padding: 15mm 20mm 25mm 20mm; 
+            box-sizing: border-box; 
+            box-shadow: 0 0 10px rgba(0,0,0,0.2); 
+            position: relative; 
+            color: #000; 
+            font-family: Arial, sans-serif; 
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between; 
+            margin: 0 auto;
+        }
+        
+        .header-section { display: flex; justify-content: space-between; margin-bottom: 20px; }
+        .seller-info h1 { font-size: 20px; font-weight: bold; margin: 0 0 5px 0; text-transform: uppercase; }
+        .seller-info h2 { font-size: 16px; font-weight: normal; margin: 0 0 10px 0; text-decoration: underline; }
+        .seller-info p { margin: 3px 0; font-size: 13px; }
+        .invoice-meta { text-align: right; font-size: 14px; font-weight: bold; }
+        .invoice-meta .date { font-weight: normal; margin-top: 10px; }
+        
+        .client-box { border: 2px solid #000; padding: 15px; width: 50%; margin-left: auto; margin-bottom: 20px; font-size: 13px; }
+        .client-box h3 { margin: 0 0 10px 0; font-size: 16px; text-decoration: underline; }
+        .client-box p { margin: 4px 0; }
+        
+        table.items-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 13px; text-align: center; }
+        table.items-table th, table.items-table td { border: 1px solid #000; padding: 8px; }
+        table.items-table th { background-color: #f9f9f9; font-weight: bold; }
+        table.items-table .text-left { text-align: left; }
+        table.items-table .text-right { text-align: right; }
+        
+        .bottom-section { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; font-size: 13px; }
+        .transport-info p { margin: 5px 0; }
+        table.totals-table { width: 300px; border-collapse: collapse; font-size: 13px; }
+        table.totals-table th, table.totals-table td { border: 1px solid #000; padding: 6px; }
+        table.totals-table th { text-align: left; background-color: #f9f9f9; }
+        table.totals-table td { text-align: right; font-weight: bold; }
+        
+        .amount-words { margin-bottom: 20px; font-size: 13px; font-weight: bold; font-style: italic; }
+        
+        .footer-print { 
+            width: 100%; 
+            text-align: center; 
+            font-size: 11px; 
+            border-top: 1px solid #000; 
+            padding-top: 8px; 
+            margin-top: auto;
+        }
+
+        /* ========================================================
+           OPTIMISATIONS 100% MOBILE (TÉLÉPHONE)
+           ======================================================== */
+        @media (max-width: 768px) {
+            input, select, textarea { font-size: 16px !important; }
+            .facture-sidebar { padding: 10px; }
+            .facture-sidebar h2 { font-size: 16px; margin-bottom: 10px; margin-top: 10px; }
+            .facture-content { padding: 5px; }
+        }
+
+        /* ========================================================
+           STYLES THÈME NUIT (DARK MODE)
+           ======================================================== */
+        body.dark-theme { background-color: #111827 !important; color: #e5e7eb !important; }
+        body.dark-theme .bg-white { background-color: #1f2937 !important; border-color: #374151 !important; color: #e5e7eb !important; }
+        body.dark-theme .bg-gray-50, body.dark-theme .bg-gray-100, body.dark-theme .bg-gray-200 { background-color: #374151 !important; color: #e5e7eb !important; }
+        body.dark-theme .text-gray-900, body.dark-theme .text-gray-800, body.dark-theme .text-gray-700, body.dark-theme .text-gray-600, body.dark-theme .text-gray-500 { color: #d1d5db !important; }
+        body.dark-theme input, body.dark-theme select, body.dark-theme textarea { background-color: #374151 !important; color: #f3f4f6 !important; border-color: #4b5563 !important; }
+        body.dark-theme .facture-sidebar { background-color: #1f2937 !important; border-color: #374151; }
+        body.dark-theme .facture-content { background-color: #111827 !important; }
+        body.dark-theme .facture-sidebar h2 { border-bottom-color: #4b5563; color: #e5e7eb; }
+        body.dark-theme .facture-sidebar label { color: #d1d5db !important; }
+        body.dark-theme .border, body.dark-theme .border-gray-200, body.dark-theme .border-gray-300 { border-color: #4b5563 !important; }
+        
+        body.dark-theme .bg-blue-50 { background-color: #1e3a8a !important; border-color: #1e40af !important; }
+        body.dark-theme .bg-teal-50 { background-color: #134e4a !important; border-color: #115e59 !important; }
+        body.dark-theme .bg-green-50 { background-color: #064e3b !important; border-color: #065f46 !important; }
+        body.dark-theme .bg-purple-50 { background-color: #4c1d95 !important; border-color: #5b21b6 !important; }
+        body.dark-theme .bg-yellow-50 { background-color: #854d0e !important; border-color: #a16207 !important; }
+        body.dark-theme .bg-purple-200 { background-color: #5b21b6 !important; }
+        body.dark-theme .bg-indigo-50 { background-color: #312e81 !important; border-color: #3730a3 !important; }
+        
+        body.dark-theme .text-blue-800 { color: #93c5fd !important; }
+        body.dark-theme .text-teal-800 { color: #5eead4 !important; }
+        body.dark-theme .text-green-800 { color: #6ee7b7 !important; }
+        body.dark-theme .text-purple-900, body.dark-theme .text-purple-800, body.dark-theme .text-purple-700, body.dark-theme .text-purple-600 { color: #c4b5fd !important; }
+        body.dark-theme .border-purple-100, body.dark-theme .border-purple-200 { border-color: #4c1d95 !important; }
+        body.dark-theme .text-green-600, body.dark-theme .text-green-700 { color: #34d399 !important; }
+
+        body.dark-theme .dropdown-menu { background-color: #1f2937 !important; border-color: #374151 !important; }
+        body.dark-theme .dropdown-menu button { color: #e5e7eb !important; border-color: #374151 !important; }
+        body.dark-theme .dropdown-menu button:hover { background-color: #374151 !important; }
+        body.dark-theme .dropdown-menu .text-blue-700 { color: #60a5fa !important; }
+        body.dark-theme .dropdown-menu .text-red-600 { color: #f87171 !important; }
+        body.dark-theme .dropdown-menu .text-blue-900, body.dark-theme .text-teal-900 { color: #93c5fd !important; } 
+
+        @media print {
+            body { background: white; }
+            .no-print, nav, #vue-accueil, #vue-analytique, #vue-menu-facturation, #vue-menu-caisse, #vue-caisse, #vue-clients, #vue-vendeurs, #vue-archives, #vue-archives-cv, #vue-catalogue-facturation, #vue-catalogue-caisse, .facture-sidebar { display: none !important; }
+            #vue-facture, #vue-cv { display: block !important; }
+            .facture-content { margin: 0 !important; padding: 0 !important; width: 100% !important; display: block !important; overflow: visible !important; }
+            .facture-page { box-shadow: none; padding: 10mm 15mm 15mm 15mm; margin: 0; width: 100%; min-height: 297mm; page-break-after: avoid; }
+            body.dark-theme { background: white !important; color: black !important; }
+        }
+    </style>
+</head>
+<body class="bg-gray-200 text-gray-900 font-sans min-h-screen flex flex-col transition-colors duration-300">
+
+<div id="app" class="flex-grow flex flex-col">
+    <!-- BARRE DE NAVIGATION -->
+    <nav class="bg-gray-900 text-white p-3 sm:p-4 shadow-md sm:h-16 flex-shrink-0 no-print z-50 relative">
+        <div class="container mx-auto max-w-6xl flex justify-between items-center gap-2">
+            <div class="flex items-center gap-2 sm:gap-4 flex-grow">
+                <button v-if="vueActuelle !== 'accueil'" @click="retourArriere" class="bg-gray-700 hover:bg-gray-600 px-2 sm:px-4 py-1.5 sm:py-2 rounded font-bold text-xs sm:text-base transition whitespace-nowrap">⬅ Retour</button>
+                <h1 class="text-sm sm:text-xl font-black tracking-widest uppercase truncate hidden min-[400px]:block">Logiciel Magasin</h1>
+            </div>
+            
+            <div class="flex items-center gap-2 sm:gap-4 flex-shrink-0">
+                <button @click="toggleTheme" class="text-sm sm:text-xl bg-gray-800 hover:bg-gray-700 border border-gray-700 px-2 py-1 sm:px-3 sm:py-1 rounded transition flex items-center justify-center h-8 sm:h-auto" :title="isDarkMode ? 'Passer en mode clair' : 'Passer en mode sombre'">
+                    {{ isDarkMode ? '☀️' : '🌙' }}
+                </button>
+                <span class="text-[10px] sm:text-sm font-bold px-2 py-1 rounded bg-gray-800 border border-gray-700 text-blue-300 uppercase tracking-widest truncate max-w-[120px] sm:max-w-none text-center">
+                    {{ titreBarreNavigation }}
+                </span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- ÉCRAN 1 : ACCUEIL PRINCIPAL -->
+    <div id="vue-accueil" v-if="vueActuelle === 'accueil'" class="container mx-auto p-4 max-w-6xl flex-grow flex flex-col justify-center my-4 sm:my-10">
+        
+        <div class="text-center mb-6 sm:mb-10">
+            <h2 class="text-2xl sm:text-4xl font-black text-gray-800 mb-2">Bonjour !</h2>
+            <p class="text-sm sm:text-lg text-gray-600 font-medium">Choisissez votre espace de travail :</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-8 mx-auto w-full max-w-4xl">
+            <!-- BOUTON 1 : OUTIL DE FACTURATION -->
+            <div @click="vueActuelle = 'menu-facturation'" class="hover-scale block bg-white rounded-2xl shadow-xl border-t-8 border-blue-500 overflow-hidden cursor-pointer group p-5 sm:p-8 text-center flex flex-col h-full">
+                <div class="text-5xl sm:text-7xl mb-4 sm:mb-6 group-hover:animate-bounce">🧾</div>
+                <h3 class="text-lg sm:text-2xl font-black text-gray-800 mb-2 sm:mb-4">Facturation</h3>
+                <p class="text-gray-500 text-xs sm:text-sm mb-6 flex-grow">Créer factures, clients, entreprises et archives.</p>
+                <span class="inline-block bg-blue-100 text-blue-700 font-black py-2 sm:py-3 px-6 rounded-xl text-sm sm:text-lg group-hover:bg-blue-600 group-hover:text-white transition-colors shadow-sm">Entrer →</span>
+            </div>
+
+            <!-- BOUTON 2 : GESTION DE CAISSE -->
+            <div @click="vueActuelle = 'menu-caisse'" class="hover-scale block bg-white rounded-2xl shadow-xl border-t-8 border-green-500 overflow-hidden cursor-pointer group p-5 sm:p-8 text-center flex flex-col h-full">
+                <div class="text-5xl sm:text-7xl mb-4 sm:mb-6 group-hover:animate-bounce">💰</div>
+                <h3 class="text-lg sm:text-2xl font-black text-gray-800 mb-2 sm:mb-4">Gestion Caisse</h3>
+                <p class="text-gray-500 text-xs sm:text-sm mb-6 flex-grow">Ventes, déduction des frais, calcul des parts.</p>
+                <span class="inline-block bg-green-100 text-green-700 font-black py-2 sm:py-3 px-6 rounded-xl text-sm sm:text-lg group-hover:bg-green-600 group-hover:text-white transition-colors shadow-sm">Entrer →</span>
+            </div>
+            
+            <!-- BOUTON 3 : ANALYTIQUE / STATS -->
+            <div @click="vueActuelle = 'analytique'" class="hover-scale block bg-white rounded-2xl shadow-xl border-t-8 border-purple-500 overflow-hidden cursor-pointer group p-5 sm:p-8 text-center flex flex-col h-full">
+                <div class="text-5xl sm:text-7xl mb-4 sm:mb-6 group-hover:animate-bounce">📊</div>
+                <h3 class="text-lg sm:text-2xl font-black text-gray-800 mb-2 sm:mb-4">Statistiques</h3>
+                <p class="text-gray-500 text-xs sm:text-sm mb-6 flex-grow">Performances globales, factures et revenus.</p>
+                <span class="inline-block bg-purple-100 text-purple-700 font-black py-2 sm:py-3 px-6 rounded-xl text-sm sm:text-lg group-hover:bg-purple-600 group-hover:text-white transition-colors shadow-sm">Consulter →</span>
+            </div>
+
+            <!-- BOUTON 4 : GÉNÉRATEUR DE CV -->
+            <div @click="vueActuelle = 'cv'" class="hover-scale block bg-white rounded-2xl shadow-xl border-t-8 border-yellow-500 overflow-hidden cursor-pointer group p-5 sm:p-8 text-center flex flex-col h-full">
+                <div class="text-5xl sm:text-7xl mb-4 sm:mb-6 group-hover:animate-bounce">📄</div>
+                <h3 class="text-lg sm:text-2xl font-black text-gray-800 mb-2 sm:mb-4">Générateur de CV</h3>
+                <p class="text-gray-500 text-xs sm:text-sm mb-6 flex-grow">Créer, archiver et importer des CV professionnels.</p>
+                <span class="inline-block bg-yellow-100 text-yellow-700 font-black py-2 sm:py-3 px-6 rounded-xl text-sm sm:text-lg group-hover:bg-yellow-600 group-hover:text-white transition-colors shadow-sm">Entrer →</span>
+            </div>
+        </div>
+
+        <!-- SECTION: SAUVEGARDE ET SÉCURITÉ -->
+        <div class="mt-12 bg-white p-6 rounded-2xl shadow-md border-t-4 border-gray-800 mx-auto w-full max-w-4xl text-center">
+            <h3 class="text-xl font-black text-gray-800 mb-2">💾 Sauvegarde & Sécurité</h3>
+            <p class="text-sm text-gray-500 mb-6">Ne perdez jamais vos informations ! Le navigateur peut s'effacer s'il est réinitialisé. Téléchargez un fichier de sauvegarde régulièrement.</p>
+            <div class="flex flex-col sm:flex-row gap-4 justify-center items-center">
+                <button @click="exporterDonnees" class="bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition w-full sm:w-auto">
+                    📥 Télécharger la Sauvegarde
+                </button>
+                
+                <!-- BOUTON DE RESTAURATION NATIF (CORRIGÉ POUR MOBILE) -->
+                <label class="bg-blue-100 hover:bg-blue-200 text-blue-800 font-bold py-3 px-6 rounded-xl flex items-center justify-center gap-2 transition w-full sm:w-auto cursor-pointer relative overflow-hidden m-0">
+                    <input type="file" accept=".json" @change="importerDonnees" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+                    <span class="pointer-events-none">📤 Restaurer un fichier</span>
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <!-- NOUVEAU MENU : ANALYTIQUE (STATISTIQUES ET GRAPHIQUES) -->
+    <div id="vue-analytique" v-if="vueActuelle === 'analytique'" class="container mx-auto p-4 max-w-6xl flex-grow flex flex-col my-4 sm:my-8">
+        <div class="text-center mb-6 sm:mb-10">
+            <h2 class="text-2xl sm:text-4xl font-black text-gray-800 mb-2">📊 Tableau de Bord Analytique</h2>
+            <p class="text-xs sm:text-lg text-gray-600 font-medium">Vue d'ensemble et performances de votre activité</p>
+        </div>
+
+        <!-- COMPTEURS GLOBAUX -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6 mb-8 w-full mx-auto">
+            <div class="bg-blue-50 border border-blue-200 p-4 sm:p-8 rounded-2xl text-center shadow-md hover-scale transition">
+                <div class="text-3xl sm:text-5xl mb-2 sm:mb-4">🧾</div>
+                <h4 class="text-gray-500 text-[10px] sm:text-sm font-bold uppercase tracking-wider mb-1 sm:mb-2">Total Factures</h4>
+                <p class="text-2xl sm:text-4xl font-black text-blue-800">{{ listeFacturesArchivees.length }}</p>
+            </div>
+            
+            <div class="bg-teal-50 border border-teal-200 p-4 sm:p-8 rounded-2xl text-center shadow-md hover-scale transition">
+                <div class="text-3xl sm:text-5xl mb-2 sm:mb-4">🏷️</div>
+                <h4 class="text-gray-500 text-[10px] sm:text-sm font-bold uppercase tracking-wider mb-1 sm:mb-2">Services Vendus (Caisse)</h4>
+                <p class="text-2xl sm:text-4xl font-black text-teal-800">{{ totalServicesGlobal }}</p>
+            </div>
+            
+            <div class="bg-green-50 border border-green-200 p-4 sm:p-8 rounded-2xl text-center shadow-md hover-scale transition">
+                <div class="text-3xl sm:text-5xl mb-2 sm:mb-4">💵</div>
+                <h4 class="text-gray-500 text-[10px] sm:text-sm font-bold uppercase tracking-wider mb-1 sm:mb-2">Chiffre d'Affaires Global</h4>
+                <p class="text-xl sm:text-3xl font-black text-green-800">{{ formaterPrix(chiffreAffairesGlobal) }} DZD</p>
+            </div>
+        </div>
+
+        <!-- GRAPHIQUES -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 w-full mx-auto mb-10">
+            <!-- Graph 1: Services par Type -->
+            <div class="bg-white p-4 sm:p-6 rounded-2xl shadow-md border border-gray-200">
+                <h3 class="text-base sm:text-xl font-black text-gray-800 mb-4 sm:mb-6 text-center">Répartition par Type de Service</h3>
+                <div class="relative w-full" style="min-height: 250px; height: 300px;">
+                    <canvas id="chart1"></canvas>
+                </div>
+            </div>
+
+            <!-- Graph 2: Revenus par Service et par Période -->
+            <div class="bg-white p-4 sm:p-6 rounded-2xl shadow-md border border-gray-200">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4 sm:mb-6 gap-3">
+                    <h3 class="text-base sm:text-xl font-black text-gray-800">Revenus par Service</h3>
+                    <select v-model="periodeChart2" @change="renderCharts" class="border border-gray-300 p-2 rounded-lg font-bold text-xs sm:text-sm bg-gray-50 text-gray-800 w-full sm:w-auto focus:outline-none">
+                        <option value="jour">Par Jour</option>
+                        <option value="mois">Par Mois</option>
+                    </select>
+                </div>
+                <div class="relative w-full" style="min-height: 250px; height: 300px;">
+                    <canvas id="chart2"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ÉCRAN 2A : SOUS-MENU FACTURATION -->
+    <div id="vue-menu-facturation" v-if="vueActuelle === 'menu-facturation'" class="container mx-auto p-4 max-w-6xl flex-grow flex flex-col justify-center my-6 sm:mb-20 sm:mt-10">
+        <div class="text-center mb-6 sm:mb-12">
+            <h2 class="text-2xl sm:text-4xl font-black text-gray-800 mb-2">🧾 Espace Facturation</h2>
+            <p class="text-sm sm:text-lg text-gray-600 font-medium">Sélectionnez une fonctionnalité :</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6 mx-auto w-full max-w-5xl">
+            <div @click="vueActuelle = 'catalogue-facturation'" class="hover-scale block bg-white rounded-2xl shadow-lg border-t-4 border-blue-500 overflow-hidden cursor-pointer group p-4 sm:p-5 text-center">
+                <div class="text-3xl sm:text-4xl mb-3 group-hover:animate-bounce">🏷️</div>
+                <h3 class="text-base sm:text-lg font-black text-gray-800 mb-1">Cat. Facturation</h3>
+                <p class="text-gray-500 text-[10px] sm:text-xs mb-4">Enregistrer les services et les classer par catégorie.</p>
+                <span class="inline-block bg-blue-100 text-blue-700 font-bold py-2 px-4 rounded-full text-xs">Gérer les prix</span>
+            </div>
+
+            <div @click="vueActuelle = 'facture'" class="hover-scale block bg-white rounded-2xl shadow-lg border-t-4 border-blue-500 overflow-hidden cursor-pointer group p-4 sm:p-5 text-center">
+                <div class="text-3xl sm:text-4xl mb-3 group-hover:animate-bounce">📝</div>
+                <h3 class="text-base sm:text-lg font-black text-gray-800 mb-1">Créer Document</h3>
+                <p class="text-gray-500 text-[10px] sm:text-xs mb-4">Rédiger devis, facture, PDF.</p>
+                <span class="inline-block bg-blue-100 text-blue-700 font-bold py-2 px-4 rounded-full text-xs">Ouvrir</span>
+            </div>
+
+            <div @click="vueActuelle = 'archives'" class="hover-scale block bg-white rounded-2xl shadow-lg border-t-4 border-yellow-500 overflow-hidden cursor-pointer group p-4 sm:p-5 text-center">
+                <div class="text-3xl sm:text-4xl mb-3 group-hover:animate-bounce">📋</div>
+                <h3 class="text-base sm:text-lg font-black text-gray-800 mb-1">Archives</h3>
+                <p class="text-gray-500 text-[10px] sm:text-xs mb-4">Historique des documents.</p>
+                <span class="inline-block bg-yellow-100 text-yellow-800 font-bold py-2 px-4 rounded-full text-xs">Ouvrir</span>
+            </div>
+
+            <div @click="vueActuelle = 'clients'" class="hover-scale block bg-white rounded-2xl shadow-lg border-t-4 border-purple-500 overflow-hidden cursor-pointer group p-4 sm:p-5 text-center">
+                <div class="text-3xl sm:text-4xl mb-3 group-hover:animate-bounce">👥</div>
+                <h3 class="text-base sm:text-lg font-black text-gray-800 mb-1">Mes Clients</h3>
+                <p class="text-gray-500 text-[10px] sm:text-xs mb-4">Annuaire des clients.</p>
+                <span class="inline-block bg-purple-100 text-purple-700 font-bold py-2 px-4 rounded-full text-xs">Ouvrir</span>
+            </div>
+            
+            <div @click="vueActuelle = 'vendeurs'" class="hover-scale block bg-white rounded-2xl shadow-lg border-t-4 border-indigo-500 overflow-hidden cursor-pointer group p-4 sm:p-5 text-center md:col-span-2 lg:col-span-1">
+                <div class="text-3xl sm:text-4xl mb-3 group-hover:animate-bounce">🏢</div>
+                <h3 class="text-base sm:text-lg font-black text-gray-800 mb-1">Entreprises</h3>
+                <p class="text-gray-500 text-[10px] sm:text-xs mb-4">Vos profils vendeurs (RC).</p>
+                <span class="inline-block bg-indigo-100 text-indigo-700 font-bold py-2 px-4 rounded-full text-xs">Ouvrir</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ÉCRAN 2B : SOUS-MENU CAISSE -->
+    <div id="vue-menu-caisse" v-if="vueActuelle === 'menu-caisse'" class="container mx-auto p-4 max-w-6xl flex-grow flex flex-col justify-center my-6 sm:mb-20 sm:mt-10">
+        <div class="text-center mb-6 sm:mb-12">
+            <h2 class="text-2xl sm:text-4xl font-black text-gray-800 mb-2">💰 Espace Caisse</h2>
+            <p class="text-sm sm:text-lg text-gray-600 font-medium">Sélectionnez une fonctionnalité :</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6 mx-auto w-full max-w-3xl">
+            <div @click="vueActuelle = 'catalogue-caisse'" class="hover-scale block bg-white rounded-2xl shadow-lg border-t-4 border-teal-500 overflow-hidden cursor-pointer group p-6 sm:p-8 text-center">
+                <div class="text-4xl sm:text-5xl mb-4 group-hover:animate-bounce">🏷️</div>
+                <h3 class="text-lg sm:text-xl font-black text-gray-800 mb-2">Catalogue Caisse</h3>
+                <p class="text-gray-500 text-xs sm:text-sm mb-6">Enregistrer les prix des produits pour la vente rapide et les classer.</p>
+                <span class="inline-block bg-teal-100 text-teal-700 font-bold py-2 sm:py-3 px-4 sm:px-6 rounded-xl text-xs sm:text-base">Gérer les prix de la caisse</span>
+            </div>
+
+            <div @click="vueActuelle = 'caisse'" class="hover-scale block bg-white rounded-2xl shadow-lg border-t-4 border-green-500 overflow-hidden cursor-pointer group p-6 sm:p-8 text-center">
+                <div class="text-4xl sm:text-5xl mb-4 group-hover:animate-bounce">💵</div>
+                <h3 class="text-lg sm:text-xl font-black text-gray-800 mb-2">Ouvrir la Caisse</h3>
+                <p class="text-gray-500 text-xs sm:text-sm mb-6">Déclarer des ventes, des frais, et gérer l'argent des employés.</p>
+                <span class="inline-block bg-green-100 text-green-700 font-bold py-2 sm:py-3 px-4 sm:px-6 rounded-xl text-xs sm:text-base">Ouvrir le registre</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ÉCRAN : CATALOGUE FACTURATION -->
+    <div id="vue-catalogue-facturation" v-if="vueActuelle === 'catalogue-facturation'" class="container mx-auto p-2 sm:p-4 max-w-6xl mt-4 flex-grow flex flex-col gap-6 lg:flex-row">
+        <div class="w-full lg:w-1/3">
+            <div class="bg-white p-4 sm:p-6 rounded-2xl shadow-lg border-t-4 border-blue-500 lg:sticky lg:top-20">
+                <h2 class="text-lg sm:text-xl font-black mb-4 text-gray-800">{{ formCatFacturation.id ? 'Modifier' : 'Ajouter' }} (Facturation)</h2>
+                <form @submit.prevent="sauvegarderCatFacturation" class="space-y-3 sm:space-y-4">
+                    <div>
+                        <label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">Nom du Service (Facture) *</label>
+                        <input type="text" v-model="formCatFacturation.nom" class="w-full border p-2 sm:p-3 rounded-lg text-base sm:text-sm" placeholder="ex: Réparation..." required>
+                    </div>
+                    <div>
+                        <label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">Catégorie / Famille (Optionnel)</label>
+                        <input type="text" v-model="formCatFacturation.categorie" list="cat-fact-list" class="w-full border p-2 sm:p-3 rounded-lg text-base sm:text-sm" placeholder="ex: Main d'œuvre, Produits...">
+                        <datalist id="cat-fact-list">
+                            <option v-for="cat in categoriesUniquesFacturation" :key="cat" :value="cat"></option>
+                        </datalist>
+                    </div>
+                    <div>
+                        <label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">Prix Unitaire (DZD) *</label>
+                        <input type="number" v-model.number="formCatFacturation.prix" class="w-full border p-2 sm:p-3 rounded-lg text-base sm:text-sm" placeholder="ex: 1500" required>
+                    </div>
+                    <div class="flex flex-col sm:flex-row gap-2 pt-2">
+                        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 sm:py-2 px-4 rounded-lg w-full transition">Enregistrer</button>
+                        <button type="button" v-if="formCatFacturation.id" @click="reinitialiserFormCatFacturation" class="bg-gray-400 hover:bg-gray-500 text-white font-bold py-3 sm:py-2 px-4 rounded-lg transition w-full sm:w-auto">Annuler</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="w-full lg:w-2/3">
+            <div class="bg-white p-4 sm:p-6 rounded-2xl shadow-lg h-full">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-3">
+                    <h2 class="text-xl sm:text-2xl font-black text-gray-800">Catalogue Facturation</h2>
+                    <input type="text" v-model="rechercheCatFacturation" placeholder="🔍 Chercher..." class="border-2 border-gray-300 p-2 rounded-lg w-full sm:w-64 focus:outline-none focus:border-blue-500 text-base sm:text-sm">
+                </div>
+                
+                <div v-if="Object.keys(catalogueFacturationGroupeFiltre).length === 0" class="text-center py-10 text-gray-400">Aucun service trouvé.</div>
+                
+                <div v-else class="space-y-4">
+                    <details open v-for="(services, categorie) in catalogueFacturationGroupeFiltre" :key="categorie" class="bg-white border border-gray-300 rounded-xl group shadow-sm overflow-hidden">
+                        <summary class="font-black text-base sm:text-lg cursor-pointer p-4 flex justify-between items-center select-none bg-gray-100 hover:bg-gray-200 transition text-blue-900">
+                            <div class="flex items-center gap-2">
+                                <span class="text-xl group-open:hidden">📁</span>
+                                <span class="text-xl hidden group-open:inline">📂</span>
+                                {{ categorie }}
+                                <span class="text-xs bg-blue-200 text-blue-900 px-2 py-0.5 rounded-full ml-2">{{ services.length }}</span>
+                            </div>
+                            <span class="transform group-open:rotate-180 transition-transform duration-200 text-gray-500">▼</span>
+                        </summary>
+                        <div class="p-3 sm:p-4 space-y-3 bg-gray-50 border-t border-gray-300">
+                            <div v-for="s in services" :key="s.id" class="border border-gray-200 rounded-xl p-3 sm:p-4 hover:shadow-md transition bg-white flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+                                <div class="flex-grow w-full">
+                                    <h3 class="font-black text-base sm:text-lg text-blue-900">{{ s.nom }}</h3>
+                                    <p class="text-sm font-bold text-green-700 mt-1">{{ formaterPrix(s.prix) }} DZD</p>
+                                </div>
+                                <div class="flex flex-row gap-2 w-full md:w-auto">
+                                    <button @click="editerCatFacturation(s)" class="bg-blue-100 hover:bg-blue-200 text-blue-700 px-3 py-2 rounded-lg text-xs sm:text-sm font-bold flex-1 text-center">Modifier</button>
+                                    <button @click="supprimerCatFacturation(s.id)" class="bg-red-100 hover:bg-red-200 text-red-700 px-3 py-2 rounded-lg text-xs sm:text-sm font-bold flex-1 text-center">Supprimer</button>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ÉCRAN : CATALOGUE CAISSE -->
+    <div id="vue-catalogue-caisse" v-if="vueActuelle === 'catalogue-caisse'" class="container mx-auto p-2 sm:p-4 max-w-6xl mt-4 flex-grow flex flex-col gap-6 lg:flex-row">
+        <div class="w-full lg:w-1/3">
+            <div class="bg-white p-4 sm:p-6 rounded-2xl shadow-lg border-t-4 border-teal-500 lg:sticky lg:top-20">
+                <h2 class="text-lg sm:text-xl font-black mb-4 text-gray-800">{{ formCatCaisse.id ? 'Modifier' : 'Ajouter' }} (Caisse)</h2>
+                <form @submit.prevent="sauvegarderCatCaisse" class="space-y-3 sm:space-y-4">
+                    <div>
+                        <label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">Nom du Produit/Service *</label>
+                        <input type="text" v-model="formCatCaisse.nom" class="w-full border p-2 sm:p-3 rounded-lg text-base sm:text-sm" placeholder="ex: Vente téléphone..." required>
+                    </div>
+                    <div>
+                        <label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">Catégorie / Famille (Optionnel)</label>
+                        <input type="text" v-model="formCatCaisse.categorie" list="cat-caisse-list" class="w-full border p-2 sm:p-3 rounded-lg text-base sm:text-sm" placeholder="ex: Smartphone, Accessoires...">
+                        <datalist id="cat-caisse-list">
+                            <option v-for="cat in categoriesUniquesCaisse" :key="cat" :value="cat"></option>
+                        </datalist>
+                    </div>
+                    <div>
+                        <label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">Prix (DZD) *</label>
+                        <input type="number" v-model.number="formCatCaisse.prix" class="w-full border p-2 sm:p-3 rounded-lg text-base sm:text-sm" placeholder="ex: 1500" required>
+                    </div>
+                    <div class="flex flex-col sm:flex-row gap-2 pt-2">
+                        <button type="submit" class="bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 sm:py-2 px-4 rounded-lg w-full transition">Enregistrer</button>
+                        <button type="button" v-if="formCatCaisse.id" @click="reinitialiserFormCatCaisse" class="bg-gray-400 hover:bg-gray-500 text-white font-bold py-3 sm:py-2 px-4 rounded-lg transition w-full sm:w-auto">Annuler</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="w-full lg:w-2/3">
+            <div class="bg-white p-4 sm:p-6 rounded-2xl shadow-lg h-full">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-3">
+                    <h2 class="text-xl sm:text-2xl font-black text-gray-800">Catalogue Caisse</h2>
+                    <input type="text" v-model="rechercheCatCaisse" placeholder="🔍 Chercher..." class="border-2 border-gray-300 p-2 rounded-lg w-full sm:w-64 focus:outline-none focus:border-teal-500 text-base sm:text-sm">
+                </div>
+                
+                <div v-if="Object.keys(catalogueCaisseGroupeFiltre).length === 0" class="text-center py-10 text-gray-400">Aucun produit/service trouvé.</div>
+                
+                <div v-else class="space-y-4">
+                    <details open v-for="(services, categorie) in catalogueCaisseGroupeFiltre" :key="categorie" class="bg-white border border-gray-300 rounded-xl group shadow-sm overflow-hidden">
+                        <summary class="font-black text-base sm:text-lg cursor-pointer p-4 flex justify-between items-center select-none bg-gray-100 hover:bg-gray-200 transition text-teal-900">
+                            <div class="flex items-center gap-2">
+                                <span class="text-xl group-open:hidden">📁</span>
+                                <span class="text-xl hidden group-open:inline">📂</span>
+                                {{ categorie }}
+                                <span class="text-xs bg-teal-200 text-teal-900 px-2 py-0.5 rounded-full ml-2">{{ services.length }}</span>
+                            </div>
+                            <span class="transform group-open:rotate-180 transition-transform duration-200 text-gray-500">▼</span>
+                        </summary>
+                        <div class="p-3 sm:p-4 space-y-3 bg-gray-50 border-t border-gray-300">
+                            <div v-for="s in services" :key="s.id" class="border border-gray-200 rounded-xl p-3 sm:p-4 hover:shadow-md transition bg-white flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
+                                <div class="flex-grow w-full">
+                                    <h3 class="font-black text-base sm:text-lg text-teal-900">{{ s.nom }}</h3>
+                                    <p class="text-sm font-bold text-green-700 mt-1">{{ formaterPrix(s.prix) }} DZD</p>
+                                </div>
+                                <div class="flex flex-row gap-2 w-full md:w-auto">
+                                    <button @click="editerCatCaisse(s)" class="bg-blue-100 hover:bg-blue-200 text-blue-700 px-3 py-2 rounded-lg text-xs sm:text-sm font-bold flex-1 text-center">Modifier</button>
+                                    <button @click="supprimerCatCaisse(s.id)" class="bg-red-100 hover:bg-red-200 text-red-700 px-3 py-2 rounded-lg text-xs sm:text-sm font-bold flex-1 text-center">Supprimer</button>
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ÉCRAN : ARCHIVES DES FACTURES -->
+    <div id="vue-archives" v-if="vueActuelle === 'archives'" class="container mx-auto p-2 sm:p-4 max-w-5xl mt-4 sm:mt-6 flex-grow">
+        <div class="bg-white p-4 sm:p-6 rounded-2xl shadow-lg">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b pb-4">
+                <h2 class="text-xl sm:text-2xl font-black text-gray-800">📋 Archives Documents</h2>
+                
+                <div class="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+                    <select v-model="filtreEntrepriseArchive" class="border-2 border-gray-300 p-2 rounded-lg font-bold bg-white cursor-pointer focus:outline-none focus:border-yellow-500 w-full sm:w-auto text-base sm:text-sm">
+                        <option value="">🏢 Toutes les entreprises</option>
+                        <option v-for="v in vendeursListe" :key="v.id" :value="v.nom">{{ v.nom }}</option>
+                    </select>
+                    <input type="text" v-model="rechercheArchive" placeholder="🔍 Rechercher client ou N°..." class="border-2 border-gray-300 p-2 rounded-lg w-full md:w-64 focus:outline-none focus:border-yellow-500 text-base sm:text-sm">
+                </div>
+            </div>
+
+            <div v-if="facturesArchiveesFiltrees.length === 0" class="text-center text-gray-400 py-12">
+                Aucun document trouvé.
+            </div>
+
+            <div v-else class="space-y-4">
+                <div v-for="f in facturesArchiveesFiltrees" :key="f.id" class="flex flex-col lg:flex-row justify-between items-start lg:items-center p-4 bg-gray-50 border rounded-xl hover:bg-gray-100 transition gap-4">
+                    <div class="w-full">
+                        <div class="flex items-center gap-2 flex-wrap mb-2">
+                            <span class="font-black text-base sm:text-lg text-blue-900">{{ f.typeDocument || 'FACTURE' }} N° {{ f.numero }}</span>
+                            <span class="text-[10px] sm:text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded font-bold">{{ f.dateLieu }}</span>
+                            <span class="text-[10px] sm:text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded font-bold uppercase truncate max-w-full">🏢 {{ f.vendeur ? f.vendeur.nom : 'Entreprise' }}</span>
+                        </div>
+                        <p class="text-xs sm:text-sm text-gray-700">Client : <strong class="text-sm sm:text-base">{{ f.clientNom }}</strong></p>
+                        <p class="text-xs sm:text-sm font-bold text-green-700 mt-1 border-t pt-1 w-fit">TTC : {{ formaterPrix(f.totalTTC) }} DZD</p>
+                    </div>
+                    <div class="flex flex-col sm:flex-row gap-2 w-full lg:w-auto">
+                        <button @click="chargerEtOuvrirFacture(f)" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 sm:py-3 rounded-lg text-sm font-bold transition w-full text-center">Ouvrir</button>
+                        <button @click="supprimerFactureArchivee(f.id)" class="bg-red-100 hover:bg-red-200 text-red-600 px-3 py-2 sm:py-3 rounded-lg text-sm font-bold transition w-full text-center">Supprimer</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ÉCRAN : MES ENTREPRISES / VENDEURS -->
+    <div id="vue-vendeurs" v-if="vueActuelle === 'vendeurs'" class="container mx-auto p-2 sm:p-4 max-w-6xl mt-4 flex-grow flex flex-col gap-6 lg:flex-row">
+        <div class="w-full lg:w-1/3">
+            <div class="bg-white p-4 sm:p-6 rounded-2xl shadow-lg border-t-4 border-indigo-500 lg:sticky lg:top-20">
+                <h2 class="text-lg sm:text-xl font-black mb-4 text-gray-800">{{ formVendeur.id ? 'Modifier l\'Entreprise' : 'Ajouter Entreprise' }}</h2>
+                <form @submit.prevent="sauvegarderVendeur" class="space-y-3 sm:space-y-4">
+                    <div><label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">Nom / Raison Sociale *</label><input type="text" v-model="formVendeur.nom" class="w-full border p-2 sm:p-3 rounded-lg text-base sm:text-sm" required></div>
+                    <div><label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">Activité</label><input type="text" v-model="formVendeur.activite" class="w-full border p-2 sm:p-3 rounded-lg text-base sm:text-sm"></div>
+                    <div><label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">Adresse</label><input type="text" v-model="formVendeur.adresse" class="w-full border p-2 sm:p-3 rounded-lg text-base sm:text-sm"></div>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div><label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">R.C.</label><input type="text" v-model="formVendeur.rc" class="w-full border p-2 rounded-lg text-base sm:text-sm"></div>
+                        <div><label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">NIF</label><input type="text" v-model="formVendeur.nif" class="w-full border p-2 rounded-lg text-base sm:text-sm"></div>
+                    </div>
+                    <div><label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">NIS</label><input type="text" v-model="formVendeur.nis" class="w-full border p-2 sm:p-3 rounded-lg text-base sm:text-sm"></div>
+                    
+                    <div class="flex flex-col sm:flex-row gap-2 pt-2">
+                        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 sm:py-2 px-4 rounded-lg w-full transition">Enregistrer</button>
+                        <button type="button" v-if="formVendeur.id" @click="reinitialiserFormVendeur" class="bg-gray-400 hover:bg-gray-500 text-white font-bold py-3 sm:py-2 px-4 rounded-lg transition w-full sm:w-auto">Annuler</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="w-full lg:w-2/3">
+            <div class="bg-white p-4 sm:p-6 rounded-2xl shadow-lg h-full">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-3">
+                    <h2 class="text-xl sm:text-2xl font-black text-gray-800">Mes Profils Entreprises</h2>
+                    <input type="text" v-model="rechercheVendeur" placeholder="🔍 Chercher..." class="border-2 border-gray-300 p-2 rounded-lg w-full sm:w-64 focus:outline-none focus:border-indigo-500 text-base sm:text-sm">
+                </div>
+                <div v-if="vendeursFiltres.length === 0" class="text-center py-10 text-gray-400">Aucune entreprise trouvée.</div>
+                <div v-else class="space-y-4">
+                    <div v-for="v in vendeursFiltres" :key="v.id" class="border border-gray-200 rounded-xl p-4 hover:shadow-md transition bg-gray-50 flex flex-col md:flex-row justify-between items-start gap-4">
+                        <div class="flex-grow w-full">
+                            <h3 class="font-black text-lg text-indigo-900">{{ v.nom }}</h3>
+                            <p class="text-sm font-bold text-gray-700" v-if="v.activite">{{ v.activite }}</p>
+                            <p class="text-sm text-gray-600 mt-1" v-if="v.adresse">📍 {{ v.adresse }}</p>
+                            <div class="flex flex-wrap gap-2 mt-2">
+                                <span v-if="v.rc" class="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded">RC: {{ v.rc }}</span>
+                                <span v-if="v.nif" class="text-xs bg-gray-200 text-gray-700 px-2 py-1 rounded">NIF: {{ v.nif }}</span>
+                            </div>
+                        </div>
+                        <div class="flex flex-row md:flex-col gap-2 w-full md:w-auto">
+                            <button @click="editerVendeur(v)" class="bg-blue-100 hover:bg-blue-200 text-blue-700 px-3 py-2 md:py-1 rounded-lg text-sm font-bold flex-1 text-center">Modifier</button>
+                            <button @click="supprimerVendeur(v.id)" class="bg-red-100 hover:bg-red-200 text-red-700 px-3 py-2 md:py-1 rounded-lg text-sm font-bold flex-1 text-center">Supprimer</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ÉCRAN : CLIENTS -->
+    <div id="vue-clients" v-if="vueActuelle === 'clients'" class="container mx-auto p-2 sm:p-4 max-w-6xl mt-4 flex-grow flex flex-col gap-6 lg:flex-row">
+        <div class="w-full lg:w-1/3">
+            <div class="bg-white p-4 sm:p-6 rounded-2xl shadow-lg border-t-4 border-purple-500 lg:sticky lg:top-20">
+                <h2 class="text-lg sm:text-xl font-black mb-4 text-gray-800">{{ formClient.id ? 'Modifier le Client' : 'Ajouter un Client' }}</h2>
+                <form @submit.prevent="sauvegarderClient" class="space-y-3 sm:space-y-4">
+                    <div class="bg-purple-50 p-3 rounded-lg border border-purple-200">
+                        <label class="block font-bold text-xs sm:text-sm mb-1 text-purple-800">Rattaché à l'entreprise *</label>
+                        <select v-model="formClient.vendeurId" class="w-full border-purple-300 p-2 sm:p-3 rounded-lg focus:outline-none text-base sm:text-sm bg-white" required>
+                            <option value="" disabled>-- Choisir une entreprise --</option>
+                            <option v-for="v in vendeursListe" :key="v.id" :value="v.id">{{ v.nom }}</option>
+                        </select>
+                    </div>
+                    <div><label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">Nom / Entreprise *</label><input type="text" v-model="formClient.nom" class="w-full border p-2 sm:p-3 rounded-lg text-base sm:text-sm" required></div>
+                    <div><label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">Téléphone</label><input type="text" v-model="formClient.telephone" class="w-full border p-2 sm:p-3 rounded-lg text-base sm:text-sm"></div>
+                    <div><label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">Adresse</label><input type="text" v-model="formClient.adresse" class="w-full border p-2 sm:p-3 rounded-lg text-base sm:text-sm"></div>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div><label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">R.C.</label><input type="text" v-model="formClient.rc" class="w-full border p-2 rounded-lg text-base sm:text-sm"></div>
+                        <div><label class="block font-bold text-xs sm:text-sm mb-1 text-gray-700">NIF</label><input type="text" v-model="formClient.nif" class="w-full border p-2 rounded-lg text-base sm:text-sm"></div>
+                    </div>
+                    
+                    <div class="flex flex-col sm:flex-row gap-2 pt-2">
+                        <button type="submit" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 sm:py-2 px-4 rounded-lg w-full transition">Enregistrer</button>
+                        <button type="button" v-if="formClient.id" @click="reinitialiserFormClient" class="bg-gray-400 hover:bg-gray-500 text-white font-bold py-3 sm:py-2 px-4 rounded-lg transition w-full sm:w-auto">Annuler</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="w-full lg:w-2/3">
+            <div class="bg-white p-4 sm:p-6 rounded-2xl shadow-lg h-full">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-3">
+                    <h2 class="text-xl sm:text-2xl font-black text-gray-800">Répertoire Clients</h2>
+                    <input type="text" v-model="rechercheClient" placeholder="🔍 Chercher un client..." class="border-2 border-gray-300 p-2 rounded-lg w-full sm:w-64 focus:outline-none focus:border-purple-500 text-base sm:text-sm">
+                </div>
+                <div v-if="clientsFiltres.length === 0" class="text-center py-10 text-gray-400">Aucun client trouvé.</div>
+                <div v-else class="space-y-4">
+                    <div v-for="c in clientsFiltres" :key="c.id" class="border border-gray-200 rounded-xl p-4 hover:shadow-md transition bg-gray-50 flex flex-col md:flex-row justify-between items-start gap-4">
+                        <div class="flex-grow w-full">
+                            <div class="flex items-center gap-2 mb-1 flex-wrap">
+                                <h3 class="font-black text-base sm:text-lg text-purple-900">{{ c.nom }}</h3>
+                                <span class="text-[10px] uppercase font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 border border-indigo-200 truncate">
+                                    🏢 {{ getNomVendeur(c.vendeurId) }}
+                                </span>
+                            </div>
+                            <p class="text-xs sm:text-sm text-gray-600" v-if="c.telephone">📞 {{ c.telephone }}</p>
+                            <p class="text-xs sm:text-sm text-gray-600" v-if="c.adresse">📍 {{ c.adresse }}</p>
+                        </div>
+                        <div class="flex flex-row md:flex-col gap-2 w-full md:w-auto">
+                            <button @click="editerClient(c)" class="bg-blue-100 hover:bg-blue-200 text-blue-700 px-3 py-2 md:py-1 rounded-lg text-sm font-bold flex-1 text-center">Modifier</button>
+                            <button @click="supprimerClient(c.id)" class="bg-red-100 hover:bg-red-200 text-red-700 px-3 py-2 md:py-1 rounded-lg text-sm font-bold flex-1 text-center">Supprimer</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ÉCRAN : FACTURE -->
+    <div id="vue-facture" v-if="vueActuelle === 'facture'" class="flex-grow facture-layout relative">
+        <div class="facture-sidebar no-print">
+            
+            <div class="relative mb-4">
+                <button @click="showExportMenu = !showExportMenu" class="btn-custom w-full flex items-center justify-center gap-2 m-0 py-3 sm:py-2 shadow" style="background: #4a5568;" title="Choisir le format d'export">
+                    📥 Exporter le document
+                    <span class="text-xs transition-transform" :class="{'transform rotate-180': showExportMenu}">▼</span>
+                </button>
+                
+                <div v-if="showExportMenu" class="absolute z-50 w-full mt-1 bg-white border-2 border-gray-200 rounded-lg shadow-xl overflow-hidden dropdown-menu">
+                    <button @click="imprimerFacture" class="w-full text-left px-4 py-3 font-bold border-b border-gray-200 text-gray-800 hover:bg-gray-100 flex items-center gap-3 transition">
+                        <span class="text-xl">🖨</span> <span class="text-sm sm:text-base">Imprimer</span>
+                    </button>
+                    <button @click="telechargerPDF" class="w-full text-left px-4 py-3 font-bold border-b border-gray-200 text-red-600 hover:bg-gray-100 flex items-center gap-3 transition">
+                        <span class="text-xl">📕</span> <span class="text-sm sm:text-base">Télécharger en PDF</span>
+                    </button>
+                    <button @click="telechargerWord" class="w-full text-left px-4 py-3 font-bold text-blue-700 hover:bg-gray-100 flex items-center gap-3 transition">
+                        <span class="text-xl">📄</span> <span class="text-sm sm:text-base">Enregistrer en Word</span>
+                    </button>
+                </div>
+            </div>
+            
+            <button class="btn-custom m-0 py-3 sm:py-2 mb-4 shadow hidden lg:block" style="background:#38a169;" @click="enregistrerFactureLogiciel" title="Enregistrer la facture">💾 Enregistrer le document</button>
+            
+            <h2>Informations Document</h2>
+            <div class="form-group">
+                <label>Type de document</label>
+                <select v-model="facture.typeDocument" class="w-full border p-2 rounded bg-white font-bold text-gray-700 text-base sm:text-sm">
+                    <option value="FACTURE">Facture</option>
+                    <option value="FACTURE PROFORMA">Facture Proforma</option>
+                    <option value="DEVIS">Devis</option>
+                    <option value="BON DE COMMANDE">Bon de Commande</option>
+                    <option value="BON DE LIVRAISON">Bon de Livraison</option>
+                </select>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+                <div class="form-group"><label>Numéro</label><input v-model="facture.numero" type="text" class="text-base sm:text-sm"></div>
+                <div class="form-group"><label>Date/Lieu</label><input v-model="facture.dateLieu" type="text" class="text-base sm:text-sm"></div>
+            </div>
+
+            <h2>Vendeur (Mon Entreprise)</h2>
+            <div class="form-group p-3 bg-indigo-50 border border-indigo-200 rounded-lg mb-4">
+                <label class="text-indigo-800 font-bold mb-1 block">🏢 Charger vendeur :</label>
+                <select v-model="vendeurSelectionneFacture" @change="appliquerVendeurFacture" class="w-full border-indigo-300 focus:outline-none rounded p-2 bg-white text-base sm:text-sm">
+                    <option value="" disabled>-- Sélectionnez --</option>
+                    <option v-for="v in vendeursListe" :key="v.id" :value="v.id">{{ v.nom }}</option>
+                </select>
+            </div>
+            <div class="form-group"><label>Nom de l'entreprise</label><input v-model="vendeur.nom" type="text" class="text-base sm:text-sm"></div>
+            <div class="form-group"><label>Activité</label><input v-model="vendeur.activite" type="text" class="text-base sm:text-sm"></div>
+            
+            <div class="grid grid-cols-2 gap-2">
+                <div class="form-group"><label>R.C.</label><input v-model="vendeur.rc" type="text" class="text-base sm:text-sm"></div>
+                <div class="form-group"><label>NIF</label><input v-model="vendeur.nif" type="text" class="text-base sm:text-sm"></div>
+            </div>
+
+            <h2>Client</h2>
+            <div class="form-group p-3 bg-purple-50 border border-purple-200 rounded-lg mb-4">
+                <label class="text-purple-800 font-bold mb-1 block">📂 Charger client :</label>
+                <select v-model="clientSelectionneFacture" @change="appliquerClientFacture" class="w-full border-purple-300 focus:outline-none rounded p-2 bg-white text-base sm:text-sm" :disabled="!vendeurSelectionneFacture">
+                    <option value="">-- Saisie manuelle --</option>
+                    <option v-for="c in clientsDuVendeurActuel" :key="c.id" :value="c.id">{{ c.nom }}</option>
+                </select>
+            </div>
+            <div class="form-group"><label>Nom du client</label><input v-model="client.nom" type="text" class="text-base sm:text-sm"></div>
+            
+            <div class="grid grid-cols-2 gap-2">
+                <div class="form-group"><label>R.C.</label><input v-model="client.rc" type="text" class="text-base sm:text-sm"></div>
+                <div class="form-group"><label>NIF</label><input v-model="client.nif" type="text" class="text-base sm:text-sm"></div>
+            </div>
+
+            <h2>Articles / Services</h2>
+            <div v-for="(article, index) in articles" :key="index" style="border:1px solid #ccc; padding:10px; margin-bottom:10px; border-radius:8px;">
+                <div class="form-group mb-2" v-if="catalogueFacturation.length > 0">
+                    <label class="text-blue-700 font-bold">🏷️ Sélectionner du catalogue :</label>
+                    <select v-model="article.catalogueId" @change="appliquerServiceFacture(article)" class="w-full border-blue-300 bg-blue-50 text-base sm:text-sm">
+                        <option value="">-- Saisie manuelle --</option>
+                        <optgroup v-for="(services, cat) in catalogueFacturationGroupeComplet" :key="cat" :label="cat">
+                            <option v-for="s in services" :key="s.id" :value="s.id">{{ s.nom }} ({{ s.prix }} DZD)</option>
+                        </optgroup>
+                    </select>
+                </div>
+
+                <div class="form-group"><label>Désignation</label><input v-model="article.designation" type="text" class="text-base sm:text-sm"></div>
+                <div style="display:flex; gap:10px;">
+                    <div class="form-group" style="flex:1"><label>Qté</label><input v-model.number="article.quantite" type="number" min="1" class="text-base sm:text-sm"></div>
+                    <div class="form-group" style="flex:1"><label>P.U. (DZD)</label><input v-model.number="article.pu" type="number" class="text-base sm:text-sm"></div>
+                </div>
+                <button class="btn-custom btn-red py-2 m-0" @click="supprimerArticle(index)">Supprimer l'article</button>
+            </div>
+            <button class="btn-custom py-3" @click="ajouterArticle" style="background:#38a169;">+ Ajouter une ligne</button>
+
+            <h2>Transport & Paiement</h2>
+            <div class="grid grid-cols-2 gap-2">
+                <div class="form-group"><label>Chauffeur</label><input v-model="transport.chauffeur" type="text" class="text-base sm:text-sm"></div>
+                <div class="form-group"><label>Matricule</label><input v-model="transport.matricule" type="text" class="text-base sm:text-sm"></div>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+                <div class="form-group"><label>Paiement</label><input v-model="transport.paiement" type="text" class="text-base sm:text-sm"></div>
+                <div class="form-group"><label>Timbre</label><input v-model.number="facture.timbre" type="number" class="text-base sm:text-sm"></div>
+            </div>
+            
+            <h2>Remarques / Détails supplémentaires</h2>
+            <div class="form-group">
+                <label>Texte en bas de page (délais, conditions...)</label>
+                <textarea v-model="facture.notes" rows="3" class="text-base sm:text-sm" placeholder="Saisissez vos délais ou remarques ici..."></textarea>
+            </div>
+            
+            <!-- BOUTON DE SAUVEGARDE SECONDAIRE UNIQUEMENT SUR MOBILE -->
+            <div class="lg:hidden mt-6 border-t pt-6">
+                <button class="btn-custom py-4 shadow w-full text-lg" style="background:#38a169;" @click="enregistrerFactureLogiciel">💾 Enregistrer le document</button>
+            </div>
+            <div class="pb-6 lg:pb-10"></div>
+        </div>
+
+        <div class="facture-content relative">
+            <!-- INDICATEUR DE DEFILEMENT POUR MOBILE -->
+            <div class="lg:hidden flex items-center justify-center gap-2 text-gray-500 text-xs font-bold mb-3 bg-white p-2 rounded-lg shadow-sm border border-gray-200">
+                <span class="animate-pulse">👈</span> Faites glisser pour voir tout le document <span class="animate-pulse">👉</span>
+            </div>
+            
+            <div class="facture-page mb-8" id="zone-facture">
+                <div>
+                    <div class="header-section">
+                        <div class="seller-info">
+                            <h1>{{ vendeur.nom }}</h1>
+                            <h2>{{ vendeur.activite }}</h2>
+                            <p>{{ vendeur.adresse }}</p>
+                            <p v-if="vendeur.rc">R.C. N°: {{ vendeur.rc }}</p>
+                            <p v-if="vendeur.nif">NIF N°: {{ vendeur.nif }}</p>
+                            <p v-if="vendeur.nis">NIS N°: {{ vendeur.nis }}</p>
+                        </div>
+                        <div class="invoice-meta">
+                            <div class="uppercase">{{ facture.typeDocument }} N° {{ facture.numero }}</div>
+                            <div class="date">{{ facture.dateLieu }}</div>
+                        </div>
+                    </div>
+
+                    <div class="client-box">
+                        <h3>CLIENT (DOIT)</h3>
+                        <p><strong>{{ client.nom }}</strong></p>
+                        <p v-if="client.adresse">Adresse: {{ client.adresse }}</p>
+                        <p v-if="client.rc || client.nif">
+                            <span v-if="client.rc">R.C. N°: {{ client.rc }}</span> 
+                            <span v-if="client.rc && client.nif"> | </span> 
+                            <span v-if="client.nif">NIF N°: {{ client.nif }}</span>
+                        </p>
+                    </div>
+
+                    <table class="items-table">
+                        <thead>
+                            <tr>
+                                <th width="5%">N°</th>
+                                <th width="45%">DÉSIGNATION</th>
+                                <th width="15%">QUANTITÉ</th>
+                                <th width="15%">P.U.<br>(DZD)</th>
+                                <th width="20%">TOTAL HT<br>(DZD)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(article, index) in articles" :key="index">
+                                <td>{{ (index + 1).toString().padStart(2, '0') }}</td>
+                                <td class="text-left">{{ article.designation }}</td>
+                                <td>{{ article.quantite }}</td>
+                                <td class="text-right">{{ formaterPrix(article.pu) }}</td>
+                                <td class="text-right">{{ formaterPrix(article.quantite * article.pu) }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+
+                    <div class="bottom-section">
+                        <div class="transport-info">
+                            <p v-if="transport.chauffeur || transport.matricule"><strong>INFORMATIONS DE TRANSPORT</strong></p>
+                            <p v-if="transport.chauffeur">Chauffeur: {{ transport.chauffeur }}</p>
+                            <p v-if="transport.matricule">Matricule: {{ transport.matricule }}</p>
+                            <p v-if="transport.paiement">Mode de paiement: {{ transport.paiement }}</p>
+                        </div>
+                        <table class="totals-table">
+                            <tr><th>Total HT</th><td>{{ formaterPrix(totalHT) }} DZD</td></tr>
+                            <tr><th>TVA (19%)</th><td>{{ formaterPrix(totalTVA) }} DZD</td></tr>
+                            <tr><th>Droit de Timbre</th><td>{{ formaterPrix(facture.timbre) }} DZD</td></tr>
+                            <tr><th style="font-size:15px;">Total TTC</th><td style="font-size:15px;">{{ formaterPrix(totalTTC) }} DZD</td></tr>
+                        </table>
+                    </div>
+
+                    <div class="amount-words">
+                        Arrêté ce présent document à la somme de :<br>
+                        <span class="text-blue-900">{{ montantEnLettres }}</span>
+                    </div>
+
+                    <div v-if="facture.notes" style="margin-bottom: 20px; font-size: 13px; border: 1px dashed #000; padding: 10px;">
+                        <strong>Remarques / Délais :</strong><br>
+                        <span style="white-space: pre-wrap;">{{ facture.notes }}</span>
+                    </div>
+                </div>
+
+                <div class="footer-print">{{ vendeur.nom }} - {{ vendeur.activite }}<br>Page 1/1</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL IMPORT CV EXPRESS -->
+    <div v-if="showImportCV" class="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-xl shadow-xl w-full max-w-lg p-6">
+            <h2 class="text-xl sm:text-2xl font-black text-gray-800 mb-2">⚡ Import Express Intelligent</h2>
+            <p class="text-xs sm:text-sm text-gray-600 mb-4">Collez le texte brut d'un CV existant. Le logiciel va l'analyser et tenter de répartir automatiquement les textes dans les bonnes cases (Expériences, Formations, Compétences...).</p>
+            <textarea v-model="texteImportCV" rows="8" class="w-full border-2 border-gray-300 p-3 rounded-lg text-sm mb-4 focus:outline-none focus:border-purple-500" placeholder="Collez le texte du CV ici..."></textarea>
+            <div class="flex flex-col sm:flex-row gap-2">
+                <button @click="importerTexteCV" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-4 rounded-lg w-full transition">Lancer le scan intelligent</button>
+                <button @click="showImportCV = false" class="bg-gray-400 hover:bg-gray-500 text-white font-bold py-3 px-4 rounded-lg w-full sm:w-1/3 transition">Annuler</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ÉCRAN : ARCHIVES DES CV -->
+    <div id="vue-archives-cv" v-if="vueActuelle === 'archives-cv'" class="container mx-auto p-2 sm:p-4 max-w-5xl mt-4 sm:mt-6 flex-grow">
+        <div class="bg-white p-4 sm:p-6 rounded-2xl shadow-lg">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4 border-b pb-4">
+                <h2 class="text-xl sm:text-2xl font-black text-gray-800">📂 Mes Archives CV</h2>
+                <input type="text" v-model="rechercheArchiveCV" placeholder="🔍 Rechercher un nom..." class="border-2 border-gray-300 p-2 rounded-lg w-full md:w-64 focus:outline-none focus:border-yellow-500 text-base sm:text-sm">
+            </div>
+
+            <div v-if="listeCVArchiveesFiltrees.length === 0" class="text-center text-gray-400 py-12">
+                Aucun CV sauvegardé dans les archives.
+            </div>
+
+            <div v-else class="space-y-4">
+                <div v-for="c in listeCVArchiveesFiltrees" :key="c.id" class="flex flex-col lg:flex-row justify-between items-start lg:items-center p-4 bg-gray-50 border rounded-xl hover:bg-gray-100 transition gap-4">
+                    <div class="w-full">
+                        <h3 class="font-black text-lg sm:text-xl text-blue-900">{{ c.nom || 'Candidat Sans Nom' }}</h3>
+                        <p class="text-sm font-bold text-gray-700">{{ c.titre || 'Sans Titre' }}</p>
+                        <p class="text-[10px] sm:text-xs text-gray-500 mt-2 font-medium">Sauvegardé le : {{ formaterDateArchive(c.id) }}</p>
+                    </div>
+                    <div class="flex flex-col sm:flex-row gap-2 w-full lg:w-auto">
+                        <button @click="chargerCVArchive(c)" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 sm:py-3 rounded-lg text-sm font-bold transition w-full text-center">Ouvrir</button>
+                        <button @click="supprimerCVArchive(c.id)" class="bg-red-100 hover:bg-red-200 text-red-600 px-3 py-2 sm:py-3 rounded-lg text-sm font-bold transition w-full text-center">Supprimer</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ÉCRAN : GÉNÉRATEUR DE CV -->
+    <div id="vue-cv" v-if="vueActuelle === 'cv'" class="flex-grow facture-layout relative">
+        <div class="facture-sidebar no-print">
+            
+            <div class="grid grid-cols-2 gap-2 mb-4">
+                <button @click="sauvegarderCVArchive" class="btn-custom m-0 shadow text-xs sm:text-sm" style="background:#38a169;" title="Sauvegarder dans les archives">💾 Enregistrer CV</button>
+                <button @click="vueActuelle = 'archives-cv'" class="btn-custom m-0 shadow text-xs sm:text-sm" style="background:#4b5563;">📂 Voir Archives</button>
+            </div>
+            
+            <button @click="showImportCV = true" class="btn-custom w-full m-0 mb-4 shadow" style="background:#8b5cf6;" title="Coller le texte d'un vieux CV">
+                ⚡ Import Express
+            </button>
+            
+            <button @click="telechargerCV" class="btn-custom w-full flex items-center justify-center gap-2 m-0 py-3 sm:py-2 mb-4 shadow text-lg" style="background: #e53e3e;">
+                📕 Télécharger en PDF
+            </button>
+
+            <h2>Informations Personnelles</h2>
+            <!-- NOUVEAU: BOUTON PHOTO -->
+            <div class="form-group">
+                <label>Photo de profil</label>
+                <input type="file" accept="image/*" @change="chargerPhotoCV" class="w-full border p-2 rounded bg-white text-base sm:text-sm">
+                <button v-if="cv.photo" @click="cv.photo = ''" class="text-red-500 font-bold text-xs mt-1 text-left w-full">Supprimer la photo</button>
+            </div>
+
+            <div class="form-group"><label>Nom complet</label><input v-model="cv.nom" type="text" class="text-base sm:text-sm"></div>
+            <div class="form-group"><label>Titre / Profil</label><input v-model="cv.titre" type="text" placeholder="ex: Développeur Web" class="text-base sm:text-sm"></div>
+            <div class="form-group"><label>Email</label><input v-model="cv.email" type="text" class="text-base sm:text-sm"></div>
+            <div class="form-group"><label>Téléphone</label><input v-model="cv.telephone" type="text" class="text-base sm:text-sm"></div>
+            <div class="form-group"><label>Adresse</label><input v-model="cv.adresse" type="text" class="text-base sm:text-sm"></div>
+            <div class="form-group"><label>Profil / À propos de vous</label><textarea v-model="cv.profil" rows="3" class="text-base sm:text-sm"></textarea></div>
+
+            <h2>Expériences</h2>
+            <div v-for="(exp, index) in cv.experiences" :key="'exp'+index" style="border:1px solid #ccc; padding:10px; margin-bottom:10px; border-radius:8px;">
+                <div class="form-group"><label>Poste / Métier</label><input v-model="exp.poste" type="text" class="text-base sm:text-sm"></div>
+                <div class="form-group"><label>Entreprise</label><input v-model="exp.entreprise" type="text" class="text-base sm:text-sm"></div>
+                <div class="form-group"><label>Période</label><input v-model="exp.periode" type="text" placeholder="ex: 2020 - Présent" class="text-base sm:text-sm"></div>
+                <div class="form-group"><label>Description des tâches</label><textarea v-model="exp.description" rows="2" class="text-base sm:text-sm"></textarea></div>
+                <button class="btn-custom btn-red py-2 m-0" @click="cv.experiences.splice(index, 1)">Supprimer</button>
+            </div>
+            <button class="btn-custom py-2" @click="cv.experiences.push({})" style="background:#d97706;">+ Ajouter Expérience</button>
+
+            <h2>Formations / Études</h2>
+            <div v-for="(form, index) in cv.formations" :key="'form'+index" style="border:1px solid #ccc; padding:10px; margin-bottom:10px; border-radius:8px;">
+                <div class="form-group"><label>Diplôme</label><input v-model="form.diplome" type="text" class="text-base sm:text-sm"></div>
+                <div class="form-group"><label>École / Université</label><input v-model="form.ecole" type="text" class="text-base sm:text-sm"></div>
+                <div class="form-group"><label>Période</label><input v-model="form.periode" type="text" class="text-base sm:text-sm"></div>
+                <button class="btn-custom btn-red py-2 m-0" @click="cv.formations.splice(index, 1)">Supprimer</button>
+            </div>
+            <button class="btn-custom py-2" @click="cv.formations.push({})" style="background:#d97706;">+ Ajouter Formation</button>
+
+            <h2>Compétences</h2>
+            <div class="form-group"><label>Compétences (séparées par des virgules)</label><input v-model="cv.competencesInput" type="text" placeholder="HTML, Vente, Gestion..." class="text-base sm:text-sm"></div>
+            
+            <h2>Langues</h2>
+            <div v-for="(langue, index) in cv.langues" :key="'lang'+index" style="border:1px solid #ccc; padding:10px; margin-bottom:10px; border-radius:8px;">
+                <div class="grid grid-cols-2 gap-2">
+                    <div class="form-group">
+                        <label>Langue</label>
+                        <select v-model="langue.nom" class="w-full border p-2 rounded bg-white text-base sm:text-sm">
+                            <option value="" disabled>-- Choisir --</option>
+                            <option value="Arabe">Arabe</option>
+                            <option value="Français">Français</option>
+                            <option value="Anglais">Anglais</option>
+                            <option value="Tamazight">Tamazight</option>
+                            <option value="Espagnol">Espagnol</option>
+                            <option value="Allemand">Allemand</option>
+                            <option value="Italien">Italien</option>
+                            <option value="Chinois">Chinois</option>
+                            <option value="Turc">Turc</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Niveau</label>
+                        <select v-model="langue.niveau" class="w-full border p-2 rounded bg-white text-base sm:text-sm">
+                            <option value="" disabled>-- Niveau --</option>
+                            <option value="Langue maternelle">Maternelle</option>
+                            <option value="Bilingue">Bilingue</option>
+                            <option value="Courant">Courant / C1-C2</option>
+                            <option value="Intermédiaire">Intermédiaire / B1-B2</option>
+                            <option value="Débutant">Débutant / A1-A2</option>
+                        </select>
+                    </div>
+                </div>
+                <button class="btn-custom btn-red py-2 m-0 mt-2" @click="cv.langues.splice(index, 1)">Supprimer</button>
+            </div>
+            <button class="btn-custom py-2 mb-4" @click="cv.langues.push({ nom: '', niveau: '' })" style="background:#d97706;">+ Ajouter Langue</button>
+            
+            <div class="lg:hidden mt-6 border-t pt-6">
+                <button @click="sauvegarderCVArchive" class="btn-custom py-4 shadow w-full text-lg mb-2" style="background:#38a169;">💾 Enregistrer dans l'archive</button>
+                <button @click="telechargerCV" class="btn-custom py-4 shadow w-full text-lg" style="background: #e53e3e;">📕 Télécharger le PDF</button>
+            </div>
+            <div class="pb-6 lg:pb-10"></div>
+        </div>
+
+        <div class="facture-content relative">
+            <div class="lg:hidden flex items-center justify-center gap-2 text-gray-500 text-xs font-bold mb-3 bg-white p-2 rounded-lg shadow-sm border border-gray-200">
+                <span class="animate-pulse">👈</span> Faites glisser pour voir tout le CV <span class="animate-pulse">👉</span>
+            </div>
+            
+            <div class="facture-page mb-8" id="zone-cv" style="padding: 0; display: flex; flex-direction: row; font-family: Arial, sans-serif;">
+                <!-- Colonne de gauche (Sombre) -->
+                <div style="width: 35%; background-color: #1f2937; color: white; padding: 30px 20px;">
+                    
+                    <!-- NOUVEAU: AFFICHAGE DE LA PHOTO -->
+                    <div v-if="cv.photo" style="text-align: center; margin-bottom: 20px;">
+                        <img :src="cv.photo" style="width: 130px; height: 130px; border-radius: 50%; object-fit: cover; border: 3px solid #4b5563; margin: 0 auto; display: block;">
+                    </div>
+
+                    <h1 style="font-size: 26px; font-weight: bold; margin: 0 0 5px 0; color: white; line-height: 1.2;">{{ cv.nom || 'Votre Nom' }}</h1>
+                    <h2 style="font-size: 16px; color: #9ca3af; margin: 0 0 35px 0; font-weight: normal;">{{ cv.titre || 'Votre Titre' }}</h2>
+                    
+                    <h3 style="font-size: 14px; font-weight: bold; margin: 0 0 15px 0; border-bottom: 2px solid #4b5563; padding-bottom: 5px; text-transform: uppercase; letter-spacing: 1px;">Contact</h3>
+                    <div style="font-size: 12px; margin-bottom: 30px; line-height: 2;">
+                        <div v-if="cv.telephone">📞 {{ cv.telephone }}</div>
+                        <div v-if="cv.email" style="word-break: break-all;">✉️ {{ cv.email }}</div>
+                        <div v-if="cv.adresse">📍 {{ cv.adresse }}</div>
+                    </div>
+
+                    <h3 style="font-size: 14px; font-weight: bold; margin: 0 0 15px 0; border-bottom: 2px solid #4b5563; padding-bottom: 5px; text-transform: uppercase; letter-spacing: 1px;" v-if="listCompetences.length > 0">Compétences</h3>
+                    <ul style="font-size: 13px; margin-bottom: 30px; padding-left: 20px; list-style-type: square; line-height: 1.8;" v-if="listCompetences.length > 0">
+                        <li v-for="comp in listCompetences" :key="comp">{{ comp.trim() }}</li>
+                    </ul>
+
+                    <h3 style="font-size: 14px; font-weight: bold; margin: 0 0 15px 0; border-bottom: 2px solid #4b5563; padding-bottom: 5px; text-transform: uppercase; letter-spacing: 1px;" v-if="cv.langues && cv.langues.length > 0 && cv.langues[0].nom">Langues</h3>
+                    <ul style="font-size: 13px; padding-left: 20px; list-style-type: square; line-height: 1.8;" v-if="cv.langues && cv.langues.length > 0 && cv.langues[0].nom">
+                        <template v-for="lang in cv.langues" :key="lang.nom">
+                            <li v-if="lang.nom">
+                                <strong>{{ lang.nom }}</strong><span v-if="lang.niveau"> : {{ lang.niveau }}</span>
+                            </li>
+                        </template>
+                    </ul>
+                </div>
+                
+                <!-- Colonne de droite (Claire) -->
+                <div style="width: 65%; background-color: white; padding: 35px 30px; color: #333;">
+                    
+                    <div v-if="cv.profil" style="margin-bottom: 30px;">
+                        <h3 style="font-size: 18px; font-weight: bold; margin: 0 0 10px 0; color: #1f2937; border-bottom: 2px solid #e5e7eb; padding-bottom: 5px; text-transform: uppercase;">Profil</h3>
+                        <p style="font-size: 13px; line-height: 1.6; margin: 0; text-align: justify; white-space: pre-wrap;">{{ cv.profil }}</p>
+                    </div>
+
+                    <div style="margin-bottom: 30px;" v-if="cv.experiences.length > 0 && cv.experiences[0].poste">
+                        <h3 style="font-size: 18px; font-weight: bold; margin: 0 0 15px 0; color: #1f2937; border-bottom: 2px solid #e5e7eb; padding-bottom: 5px; text-transform: uppercase;">Expériences Professionnelles</h3>
+                        <div v-for="exp in cv.experiences" :key="exp.poste" style="margin-bottom: 18px;">
+                            <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                                <h4 style="font-size: 15px; font-weight: bold; color: #111827; margin: 0;">{{ exp.poste }}</h4>
+                                <span style="font-size: 12px; color: #d97706; font-weight: bold;">{{ exp.periode }}</span>
+                            </div>
+                            <div style="font-size: 14px; color: #4b5563; font-style: italic; margin-bottom: 6px;">{{ exp.entreprise }}</div>
+                            <p style="font-size: 13px; line-height: 1.5; margin: 0; color: #374151; white-space: pre-wrap;">{{ exp.description }}</p>
+                        </div>
+                    </div>
+
+                    <div v-if="cv.formations.length > 0 && cv.formations[0].diplome">
+                        <h3 style="font-size: 18px; font-weight: bold; margin: 0 0 15px 0; color: #1f2937; border-bottom: 2px solid #e5e7eb; padding-bottom: 5px; text-transform: uppercase;">Formations</h3>
+                        <div v-for="form in cv.formations" :key="form.diplome" style="margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                                <h4 style="font-size: 15px; font-weight: bold; color: #111827; margin: 0;">{{ form.diplome }}</h4>
+                                <span style="font-size: 12px; color: #d97706; font-weight: bold;">{{ form.periode }}</span>
+                            </div>
+                            <div style="font-size: 14px; color: #4b5563; margin: 0;">{{ form.ecole }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ÉCRAN : CAISSE -->
+    <div id="vue-caisse" v-if="vueActuelle === 'caisse'" class="container mx-auto p-2 sm:p-4 max-w-5xl mt-4">
+        <div class="flex justify-end mb-4 sm:mb-6">
+            <select v-model="moisSelectionne" class="border-2 border-gray-400 rounded-lg p-2 font-bold bg-white text-base sm:text-lg cursor-pointer shadow-sm w-full sm:w-auto">
+                <option value="tous">Tous les mois (Global)</option>
+                <option disabled>──────────</option>
+                <option v-for="mois in listeMois" :key="mois.valeur" :value="mois.valeur">{{ mois.label }}</option>
+            </select>
+        </div>
+
+        <div class="bg-gray-900 text-white p-4 sm:p-6 rounded-2xl shadow-lg mb-6">
+            <h2 class="text-center text-gray-400 text-[10px] sm:text-sm uppercase font-bold mb-4 tracking-widest">Résumé Caisse (Période)</h2>
+            <div class="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4 text-center lg:divide-x lg:divide-gray-700">
+                <div class="bg-gray-800 lg:bg-transparent p-3 lg:p-0 rounded-lg lg:rounded-none"><p class="text-gray-400 text-[10px] sm:text-xs uppercase font-bold mb-1">Ventes (Rentrées)</p><p class="text-lg sm:text-xl font-bold text-green-400">{{ formaterPrix(totalRentreesCaisse) }}</p></div>
+                <div class="bg-gray-800 lg:bg-transparent p-3 lg:p-0 rounded-lg lg:rounded-none"><p class="text-gray-400 text-[10px] sm:text-xs uppercase font-bold mb-1">Frais Variables</p><p class="text-lg sm:text-xl font-bold text-orange-400">- {{ formaterPrix(totalFraisVariablesCaisse) }}</p></div>
+                <div class="bg-gray-800 lg:bg-transparent p-3 lg:p-0 rounded-lg lg:rounded-none"><p class="text-gray-400 text-[10px] sm:text-xs uppercase font-bold mb-1">Frais Fixes Mensuels</p><p class="text-lg sm:text-xl font-bold text-purple-400">- {{ formaterPrix(totalFraisFixesCaisse) }}</p></div>
+                <div class="bg-gray-800 lg:bg-transparent p-3 lg:p-0 rounded-lg lg:rounded-none"><p class="text-gray-400 text-[10px] sm:text-xs uppercase font-bold mb-1">Avances Persos</p><p class="text-lg sm:text-xl font-bold text-red-400">- {{ formaterPrix(totalRetraitsCaisse) }}</p></div>
+                <div class="bg-gray-800 lg:bg-transparent p-3 lg:p-0 rounded-lg lg:rounded-none col-span-2 lg:col-span-1"><p class="text-gray-400 text-[10px] sm:text-xs uppercase font-bold mb-1">Argent Physique</p><p class="text-xl sm:text-2xl font-black" :class="soldeCaisse >= 0 ? 'text-white' : 'text-red-500'">{{ formaterPrix(soldeCaisse) }}</p></div>
+            </div>
+        </div>
+
+        <div class="bg-white border-2 border-gray-300 p-2 sm:p-6 rounded-2xl shadow-sm mb-6" v-if="moisSelectionne !== 'tous'">
+            <h2 class="text-lg sm:text-xl font-black text-gray-800 uppercase mb-3 flex items-center gap-2 border-b-2 pb-2 mx-2 sm:mx-0">📅 Calendrier</h2>
+            <div class="grid grid-cols-7 gap-0.5 sm:gap-2 mb-1 sm:mb-2 text-center text-[9px] sm:text-sm font-bold text-gray-500 uppercase">
+                <div>Lu</div><div>Ma</div><div>Me</div><div>Je</div><div>Ve</div><div>Sa</div><div>Di</div>
+            </div>
+            <div class="grid grid-cols-7 gap-0.5 sm:gap-2">
+                <div v-for="(jour, index) in joursDuMois" :key="index" class="min-h-[60px] sm:min-h-[90px] p-0.5 sm:p-2 rounded border" :class="jour.vide ? 'bg-transparent border-transparent' : 'bg-gray-50 border-gray-200 flex flex-col justify-between'">
+                    <template v-if="!jour.vide">
+                        <div class="text-right font-black text-gray-400 text-[10px] sm:text-sm mb-1">{{ jour.jour }}</div>
+                        <div class="text-[8px] sm:text-xs font-bold flex flex-col gap-0.5 sm:gap-1 text-center sm:text-left">
+                            <div v-if="jour.rentrees > 0" class="text-green-600 bg-green-100 rounded sm:px-1 py-0.5 truncate">+{{ formaterPrixCourt(jour.rentrees) }}</div>
+                            <div v-if="jour.sorties > 0" class="text-red-600 bg-red-100 rounded sm:px-1 py-0.5 truncate">-{{ formaterPrixCourt(jour.sorties) }}</div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-blue-50 border-2 border-blue-200 p-4 sm:p-6 rounded-2xl shadow-sm mb-8" v-if="bilanParEmploye.length > 0">
+            <h2 class="text-lg sm:text-xl font-black text-blue-900 uppercase mb-4 sm:mb-6 border-b-2 border-blue-200 pb-2">Bilan par Employé</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div v-for="emp in bilanParEmploye" :key="emp.nom" class="bg-white p-4 sm:p-5 rounded-xl shadow-md border border-gray-100 flex flex-col justify-between">
+                    <div class="font-black text-xl sm:text-2xl text-gray-800 mb-3 border-b pb-2">{{ emp.nom }}</div>
+                    
+                    <div class="bg-gray-50 p-2 rounded mb-4 text-[10px] sm:text-xs font-bold flex flex-wrap gap-2 border border-gray-200 justify-between items-center">
+                        <div class="flex items-center gap-1 w-full sm:w-auto justify-between sm:justify-start"><span class="text-gray-500">Com. ventes :</span><input type="number" v-model.number="parametresEmployes[emp.nom].commission" class="w-12 text-center border rounded p-1 text-base sm:text-sm"> %</div>
+                        <div class="flex items-center gap-1 w-full sm:w-auto justify-between sm:justify-start"><span class="text-gray-500">Part Frais Var. :</span><input type="number" v-model.number="parametresEmployes[emp.nom].contributionFraisVariables" class="w-12 text-center border rounded p-1 text-base sm:text-sm"> %</div>
+                        <div class="flex items-center gap-1 w-full sm:w-auto justify-between sm:justify-start"><span class="text-gray-500">Part Frais Fixes :</span><input type="number" v-model.number="parametresEmployes[emp.nom].contributionFraisFixes" class="w-12 text-center border rounded p-1 text-base sm:text-sm"> %</div>
+                    </div>
+                    
+                    <div class="space-y-2 mb-4 text-xs sm:text-sm font-bold">
+                        <div class="flex justify-between text-gray-600 bg-gray-50 p-2 rounded border border-gray-100"><span>Ventes :</span><span>{{ formaterPrix(emp.rentrees) }}</span></div>
+                        <div class="flex justify-between text-green-700 bg-green-50 p-2 rounded"><span>Part (+{{ emp.commissionPct }}%) :</span><span>+ {{ formaterPrix(emp.partVentes) }}</span></div>
+                        <div class="flex justify-between text-orange-700 bg-orange-50 p-2 rounded" v-if="emp.contributionVarPct > 0"><span>Frais Variables (-{{ emp.contributionVarPct }}%) :</span><span>- {{ formaterPrix(emp.partFraisVariables) }}</span></div>
+                        <div class="flex justify-between text-purple-700 bg-purple-50 p-2 rounded" v-if="emp.contributionFixePct > 0"><span>Frais Fixes (-{{ emp.contributionFixePct }}%) :</span><span>- {{ formaterPrix(emp.partFraisFixes) }}</span></div>
+                        <div class="flex justify-between text-red-600 bg-red-50 p-2 rounded" v-if="emp.retraits > 0"><span>Avances :</span><span>- {{ formaterPrix(emp.retraits) }}</span></div>
+                    </div>
+                    
+                    <div class="pt-3 border-t-2 border-gray-800">
+                        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center text-sm p-3 rounded-lg gap-1" :class="emp.resteAPayer >= 0 ? 'bg-green-100 border border-green-300' : 'bg-red-100 border border-red-300'">
+                            <span class="font-black text-gray-800 text-xs sm:text-sm" v-if="emp.resteAPayer >= 0">Reste à payer :</span>
+                            <span class="font-black text-gray-800 text-xs sm:text-sm" v-else>Doit à la caisse :</span>
+                            <span class="font-black text-lg sm:text-xl w-full sm:w-auto text-right sm:text-left" :class="emp.resteAPayer >= 0 ? 'text-green-700' : 'text-red-700'">{{ formaterPrix(Math.abs(emp.resteAPayer)) }}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white p-4 sm:p-6 rounded-2xl shadow-lg mb-8 border-t-4 border-blue-500">
+            <h2 class="text-lg sm:text-xl font-bold mb-4 sm:mb-6 text-center">Déclarer une opération</h2>
+            <form @submit.prevent="enregistrerAction">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4 sm:mb-6">
+                    <div><label class="block font-bold mb-1 sm:mb-2 text-sm text-gray-700">1. Qui fait l'opération ?</label><input type="text" v-model="formCaisse.employe" class="w-full text-base sm:text-lg border-2 border-gray-300 rounded-lg p-2 sm:p-3 uppercase" placeholder="Nom de l'employé..." required></div>
+                    <div><label class="block font-bold mb-1 sm:mb-2 text-sm text-gray-700">2. Date</label><input type="date" v-model="formCaisse.date" class="w-full text-base sm:text-lg border-2 border-gray-300 rounded-lg p-2 sm:p-3 cursor-pointer" required></div>
+                </div>
+                
+                <label class="block font-bold mb-2 text-sm text-gray-700">3. Type d'opération ?</label>
+                <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4 mb-4 sm:mb-6">
+                    <label class="cursor-pointer"><input type="radio" v-model="formCaisse.type" value="rentree" class="hidden"><div class="text-center p-2 sm:p-4 rounded-xl border-4 font-bold transition-all h-full text-xs sm:text-sm flex flex-col justify-center" :class="formCaisse.type === 'rentree' ? 'border-green-500 bg-green-100 text-green-800' : 'border-gray-200 text-gray-400 hover:bg-gray-50'">🟩 RENTRÉE</div></label>
+                    <label class="cursor-pointer"><input type="radio" v-model="formCaisse.type" value="frais_variable" class="hidden"><div class="text-center p-2 sm:p-4 rounded-xl border-4 font-bold transition-all h-full text-xs sm:text-sm flex flex-col justify-center" :class="formCaisse.type === 'frais_variable' ? 'border-orange-500 bg-orange-100 text-orange-800' : 'border-gray-200 text-gray-400 hover:bg-gray-50'">🟧 FRAIS VAR.<br><span class="text-[10px] font-normal mt-1 text-gray-500">(Achats, repas...)</span></div></label>
+                    <label class="cursor-pointer"><input type="radio" v-model="formCaisse.type" value="frais_fixe" class="hidden"><div class="text-center p-2 sm:p-4 rounded-xl border-4 font-bold transition-all h-full text-xs sm:text-sm flex flex-col justify-center" :class="formCaisse.type === 'frais_fixe' ? 'border-purple-500 bg-purple-100 text-purple-800' : 'border-gray-200 text-gray-400 hover:bg-gray-50'">🟪 FRAIS FIXE<br><span class="text-[10px] font-normal mt-1 text-gray-500">(Loyer, factures...)</span></div></label>
+                    <label class="cursor-pointer"><input type="radio" v-model="formCaisse.type" value="retrait" class="hidden"><div class="text-center p-2 sm:p-4 rounded-xl border-4 font-bold transition-all h-full text-xs sm:text-sm flex flex-col justify-center" :class="formCaisse.type === 'retrait' ? 'border-red-500 bg-red-100 text-red-800' : 'border-gray-200 text-gray-400 hover:bg-gray-50'">🟥 AVANCE<br><span class="text-[10px] font-normal mt-1 text-gray-500">(Personnelle)</span></div></label>
+                </div>
+
+                <div v-if="formCaisse.type === 'rentree' && catalogueCaisse.length > 0" class="bg-gray-50 p-3 rounded-lg border border-gray-200 mb-4 sm:mb-6">
+                    <label class="block font-bold mb-2 text-sm text-teal-800">🏷️ Calcul rapide via le Catalogue (Optionnel)</label>
+                    <div class="flex flex-col sm:flex-row gap-2">
+                        <select v-model="formCaisse.catalogueId" @change="calculerMontantCaisse" class="flex-grow border p-2 rounded-lg bg-white text-base sm:text-sm">
+                            <option value="">-- Choisir un service/produit --</option>
+                            <optgroup v-for="(services, cat) in catalogueCaisseGroupeComplet" :key="cat" :label="cat">
+                                <option v-for="s in services" :key="s.id" :value="s.id">{{ s.nom }} ({{ s.prix }} DZD)</option>
+                            </optgroup>
+                        </select>
+                        <div class="flex items-center gap-2">
+                            <label class="text-sm font-bold text-gray-600">Quantité :</label>
+                            <input type="number" v-model.number="formCaisse.quantite" @input="calculerMontantCaisse" min="1" class="w-20 border p-2 rounded-lg text-center bg-white text-base sm:text-sm">
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="mb-4 sm:mb-6"><label class="block font-bold mb-2 text-sm text-gray-700">4. Montant Final (DZD)</label><input type="number" v-model.number="formCaisse.montant" min="1" class="w-full text-xl sm:text-2xl font-bold text-center border-2 border-gray-300 rounded-lg p-3" placeholder="0" required></div>
+                <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-black text-lg sm:text-xl py-4 rounded-xl shadow-md transition-colors">VALIDER L'OPÉRATION</button>
+            </form>
+        </div>
+
+        <!-- RÉCAPITULATIF MENSUEL (Frais Fixes & Revenus) -->
+        <div class="bg-white p-4 sm:p-6 rounded-2xl shadow-lg mb-8 border-t-4 border-purple-500">
+            <h3 class="font-black text-xl sm:text-2xl mb-4 sm:mb-6 text-purple-900 border-b-2 border-purple-100 pb-2">📅 Récapitulatif Mensuel</h3>
+            
+            <div v-if="fraisFixesDuMois.length === 0" class="text-center text-gray-400 py-4">Aucun frais fixe enregistré pour ce mois.</div>
+            <div v-else class="space-y-3">
+                <div v-for="tx in fraisFixesDuMois" :key="tx.id" class="flex flex-row items-center justify-between p-3 sm:p-4 bg-purple-50 rounded-xl border border-purple-100">
+                    <div class="flex flex-col">
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <span class="font-black text-gray-800 text-sm sm:text-lg">{{ tx.employe }}</span>
+                            <span class="text-[9px] sm:text-xs bg-purple-200 text-purple-800 px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full font-bold uppercase">FRAIS FIXE</span>
+                        </div>
+                        <span class="text-[10px] sm:text-sm text-gray-500 mt-1" v-if="tx.date.includes('T')">{{ new Date(tx.date.split('T')[0]).toLocaleDateString('fr-FR') }}</span>
+                    </div>
+                    <div class="flex items-center gap-2 sm:gap-4">
+                        <span class="font-black text-base sm:text-xl text-purple-600 text-right">-{{ formaterPrixCourt(tx.montant) }}</span>
+                        <button @click="supprimerTx(tx.id)" class="text-gray-400 hover:text-red-600 font-bold px-1 sm:px-2 text-xl sm:text-2xl">×</button>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mt-6 pt-4 border-t-2 border-gray-200 flex flex-col gap-3">
+                <div class="flex justify-between items-center bg-gray-50 p-3 rounded-lg border border-gray-200">
+                    <span class="font-bold text-gray-700">Total Frais Fixes :</span>
+                    <span class="font-black text-xl text-purple-700">- {{ formaterPrix(totalFraisFixesCaisse) }} DZD</span>
+                </div>
+                <div class="flex justify-between items-center bg-gray-50 p-3 rounded-lg border border-gray-200">
+                    <span class="font-bold text-gray-700">Totalité des Revenus (Rentrées) :</span>
+                    <span class="font-black text-xl text-green-600">+ {{ formaterPrix(totalRentreesCaisse) }} DZD</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white p-4 sm:p-6 rounded-2xl shadow-lg">
+            <h3 class="font-black text-xl sm:text-2xl mb-4 sm:mb-6 text-gray-800 border-b pb-2">Historique journalier</h3>
+            <div v-if="historiqueParJour.length === 0" class="text-center text-gray-400 py-6">Rien à afficher.</div>
+            <div v-else class="space-y-4 sm:space-y-6">
+                <details open v-for="jour in historiqueParJour" :key="jour.dateStr" class="bg-white border border-gray-300 rounded-xl group shadow-sm overflow-hidden">
+                    <summary class="cursor-pointer bg-gray-100 border-l-4 border-blue-500 p-3 sm:p-4 flex flex-col md:flex-row justify-between md:items-center gap-3 select-none hover:bg-gray-200 transition">
+                        <div class="flex items-center gap-2">
+                            <span class="text-xl group-open:hidden">📁</span>
+                            <span class="text-xl hidden group-open:inline">📂</span>
+                            <h4 class="font-bold text-sm sm:text-lg text-gray-800 capitalize">{{ jour.labelDate }}</h4>
+                            <span class="text-[10px] sm:text-xs bg-blue-200 text-blue-900 px-2 py-0.5 rounded-full ml-1">{{ jour.operations.length }} op.</span>
+                        </div>
+                        
+                        <div class="flex items-center gap-3 w-full md:w-auto justify-between md:justify-end">
+                            <div class="flex gap-2 sm:gap-3 text-xs sm:text-sm font-bold bg-white px-2 py-1 rounded shadow-sm border border-gray-200 w-fit">
+                                <span class="text-green-600">↑ {{ formaterPrixCourt(jour.totalRentrees) }}</span>
+                                <span class="text-red-500">↓ {{ formaterPrixCourt(jour.totalSorties) }}</span>
+                            </div>
+                            <span class="transform group-open:rotate-180 transition-transform duration-200 text-gray-500 ml-1">▼</span>
+                        </div>
+                    </summary>
+                    
+                    <div class="p-3 sm:p-4 bg-gray-50 border-t border-gray-300 space-y-2">
+                        <div v-for="tx in jour.operations" :key="tx.id" class="flex flex-row items-center justify-between p-3 sm:p-4 bg-white rounded-xl border border-gray-200 hover:shadow-md transition gap-2">
+                            <div class="flex flex-col">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <span class="font-black text-gray-800 text-sm sm:text-lg">{{ tx.employe }}</span>
+                                    
+                                    <span class="text-[9px] sm:text-xs px-1.5 sm:px-2 py-0.5 sm:py-1 rounded-full font-bold uppercase" 
+                                          :class="{
+                                              'bg-green-200 text-green-800': tx.type === 'rentree', 
+                                              'bg-orange-200 text-orange-800': tx.type === 'frais' || tx.type === 'frais_variable', 
+                                              'bg-red-200 text-red-800': tx.type === 'retrait'
+                                          }">
+                                          {{ tx.type === 'rentree' ? getServiceInfo(tx) : (tx.type === 'frais' ? 'FRAIS VAR.' : tx.type.replace('_', ' ')) }}
+                                    </span>
+                                </div>
+                                <span class="text-[10px] sm:text-sm text-gray-500 mt-1" v-if="tx.date.includes('T')">{{ formaterHeure(tx.date) }}</span>
+                            </div>
+                            <div class="flex items-center gap-2 sm:gap-4">
+                                <span class="font-black text-base sm:text-xl text-right" 
+                                      :class="{
+                                          'text-green-600': tx.type === 'rentree', 
+                                          'text-orange-500': tx.type === 'frais' || tx.type === 'frais_variable', 
+                                          'text-red-600': tx.type === 'retrait'
+                                      }">
+                                    {{ tx.type === 'rentree' ? '+' : '-' }}{{ formaterPrixCourt(tx.montant) }}
+                                </span>
+                                <button @click="supprimerTx(tx.id)" class="text-gray-300 hover:text-red-600 font-bold px-1 sm:px-2 text-xl sm:text-2xl">×</button>
+                            </div>
+                        </div>
+                    </div>
+                </details>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const { createApp, ref, computed, onMounted, watch } = Vue;
+
+    createApp({
+        setup() {
+            const vueActuelle = ref('accueil'); 
+
+            const titreBarreNavigation = computed(() => {
+                if (vueActuelle.value === 'menu-facturation') return 'Menu Facturation';
+                if (vueActuelle.value === 'menu-caisse') return 'Menu Caisse';
+                if (vueActuelle.value === 'catalogue-facturation') return 'Cat. Facturation';
+                if (vueActuelle.value === 'catalogue-caisse') return 'Cat. Caisse';
+                if (vueActuelle.value === 'analytique') return 'Statistiques';
+                if (vueActuelle.value === 'cv') return 'Générateur CV';
+                if (vueActuelle.value === 'archives-cv') return 'Archives CV';
+                return vueActuelle.value;
+            });
+
+            const retourArriere = () => {
+                if (['facture', 'archives', 'clients', 'vendeurs', 'catalogue-facturation'].includes(vueActuelle.value)) {
+                    vueActuelle.value = 'menu-facturation';
+                } else if (['caisse', 'catalogue-caisse'].includes(vueActuelle.value)) {
+                    vueActuelle.value = 'menu-caisse';
+                } else if (vueActuelle.value === 'archives-cv') {
+                    vueActuelle.value = 'cv';
+                } else {
+                    vueActuelle.value = 'accueil'; 
+                }
+            };
+
+            const isDarkMode = ref(false);
+            const toggleTheme = () => {
+                isDarkMode.value = !isDarkMode.value;
+                document.body.classList.toggle('dark-theme', isDarkMode.value);
+                localStorage.setItem('theme_nuit', isDarkMode.value ? 'true' : 'false');
+            };
+
+            const showExportMenu = ref(false);
+            
+            const imprimerFacture = () => {
+                showExportMenu.value = false;
+                window.print();
+            };
+            
+            const telechargerPDF = () => {
+                showExportMenu.value = false;
+                const element = document.getElementById('zone-facture');
+                const opt = {
+                    margin:       0,
+                    filename:     `${facture.value.typeDocument}_${facture.value.numero ? facture.value.numero.replace(/[^a-zA-Z0-9-]/g, '_') : 'entreprise'}.pdf`,
+                    image:        { type: 'jpeg', quality: 0.98 },
+                    html2canvas:  { scale: 2 },
+                    jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+                };
+                html2pdf().set(opt).from(element).save();
+            };
+
+            const telechargerWord = () => {
+                showExportMenu.value = false;
+                exporterWord();
+            };
+
+            // ---- MODULE SAUVEGARDE ET RESTAURATION (NOUVEAU) ---- //
+            const exporterDonnees = () => {
+                try {
+                    const allData = {};
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const key = localStorage.key(i);
+                        allData[key] = localStorage.getItem(key);
+                    }
+                    const blob = new Blob([JSON.stringify(allData)], { type: "application/json" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `sauvegarde_magasin_${new Date().toISOString().split('T')[0]}.json`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                } catch (e) {
+                    alert("Erreur lors de la sauvegarde : " + e.message);
+                }
+            };
+
+            const importerDonnees = (event) => {
+                const file = event.target.files[0];
+                if (!file) return;
+                
+                if (!confirm("ATTENTION : L'importation va écraser vos données actuelles et récupérer toutes les anciennes données du fichier. Voulez-vous continuer ?")) {
+                    event.target.value = ''; 
+                    return;
+                }
+
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const data = JSON.parse(e.target.result);
+                        let count = 0;
+                        for (const key in data) {
+                            localStorage.setItem(key, data[key]);
+                            count++;
+                        }
+                        if (count > 0) {
+                            alert("✅ " + count + " éléments restaurés avec succès ! L'application va se recharger.");
+                            window.location.reload();
+                        } else {
+                            alert("⚠️ Le fichier de sauvegarde semble vide.");
+                        }
+                    } catch (err) {
+                        alert("❌ Erreur de lecture : " + err.message);
+                    }
+                };
+                reader.onerror = () => {
+                    alert("❌ Impossible de lire le fichier de sauvegarde.");
+                };
+                reader.readAsText(file);
+            };
+            // ----------------------------------------------------- //
+
+
+            // ---- MODULE CV & ARCHIVES CV ---- //
+            const cv = ref({ 
+                id: null,
+                photo: '',
+                nom: '', titre: '', email: '', telephone: '', adresse: '', profil: '', 
+                experiences: [{ poste: '', entreprise: '', periode: '', description: '' }], 
+                formations: [{ diplome: '', ecole: '', periode: '' }], 
+                langues: [{ nom: 'Arabe', niveau: 'Langue maternelle' }, { nom: 'Français', niveau: 'Courant' }],
+                competencesInput: '' 
+            });
+            
+            const chargerPhotoCV = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        cv.value.photo = event.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                }
+            };
+
+            const listeCVArchivees = ref([]);
+            const rechercheArchiveCV = ref('');
+            const showImportCV = ref(false);
+            const texteImportCV = ref('');
+
+            const listCompetences = computed(() => cv.value.competencesInput.split(',').filter(s => s.trim() !== ''));
+
+            watch(cv, (newVals) => localStorage.setItem('mon_cv_v1', JSON.stringify(newVals)), { deep: true });
+            watch(listeCVArchivees, (newVals) => localStorage.setItem('archives_cv_v1', JSON.stringify(newVals)), { deep: true });
+
+            const listeCVArchiveesFiltrees = computed(() => {
+                const term = rechercheArchiveCV.value.toLowerCase();
+                if (!term) return listeCVArchivees.value;
+                return listeCVArchivees.value.filter(c => (c.nom && c.nom.toLowerCase().includes(term)) || (c.titre && c.titre.toLowerCase().includes(term)));
+            });
+
+            const sauvegarderCVArchive = () => {
+                if (!cv.value.nom) {
+                    alert("Veuillez au moins entrer un nom avant de sauvegarder le CV.");
+                    return;
+                }
+                const newCV = JSON.parse(JSON.stringify(cv.value));
+                if (!newCV.id) newCV.id = Date.now();
+
+                const index = listeCVArchivees.value.findIndex(c => c.id === newCV.id);
+                if (index !== -1) {
+                    listeCVArchivees.value[index] = newCV;
+                } else {
+                    listeCVArchivees.value.unshift(newCV);
+                }
+                cv.value.id = newCV.id; 
+                alert("CV sauvegardé dans les archives !");
+            };
+
+            const chargerCVArchive = (cArchive) => {
+                cv.value = JSON.parse(JSON.stringify(cArchive));
+                vueActuelle.value = 'cv';
+                window.scrollTo(0, 0);
+            };
+
+            const supprimerCVArchive = (id) => {
+                if (confirm("Voulez-vous supprimer ce CV des archives ?")) {
+                    listeCVArchivees.value = listeCVArchivees.value.filter(c => c.id !== id);
+                    if (cv.value.id === id) cv.value.id = null;
+                }
+            };
+
+            const formaterDateArchive = (timestamp) => {
+                if (!timestamp) return '';
+                return new Date(timestamp).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+            };
+
+            // NOUVELLE FONCTION D'IMPORT INTELLIGENTE
+            const importerTexteCV = () => {
+                const txt = texteImportCV.value;
+                if (!txt) return;
+
+                // 1. Extraction Email & Tel
+                const emailMatch = txt.match(/[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}/);
+                if (emailMatch) cv.value.email = emailMatch[0];
+
+                const telMatch = txt.match(/(?:\+213|00213|0)(?:\s|-|\.)?[567](?:\s|-|\.)?(?:\d(?:\s|-|\.)?){8}/);
+                if (telMatch) cv.value.telephone = telMatch[0];
+
+                const lignes = txt.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+                // 2. Extraire le Nom (Première ligne qui n'est pas "CV")
+                let nomTrouve = false;
+                for (let l of lignes) {
+                    const low = l.toLowerCase();
+                    if (!nomTrouve && !low.includes('cv') && !low.includes('curriculum') && l.length < 40) {
+                        cv.value.nom = l;
+                        nomTrouve = true;
+                        break;
+                    }
+                }
+
+                // 3. Séparation intelligente par blocs
+                let currentSection = 'profil';
+                let blocs = { profil: [], experiences: [], formations: [], competences: [], langues: [] };
+
+                const regexExp = /exp[ée]rience|professionnel|emploi/i;
+                const regexForm = /formation|[ée]tude|dipl[ôo]me|cursus|scolaire/i;
+                const regexComp = /comp[ée]tence|skill|atout/i;
+                const regexLang = /langue/i;
+
+                let startIdx = (cv.value.nom && lignes[0] === cv.value.nom) ? 1 : 0;
+
+                for (let i = startIdx; i < lignes.length; i++) {
+                    const ligne = lignes[i];
+                    const ligneLower = ligne.toLowerCase();
+
+                    // Détection des titres de sections (lignes courtes)
+                    if (ligne.length < 40) {
+                        if (regexExp.test(ligneLower)) { currentSection = 'experiences'; continue; }
+                        if (regexForm.test(ligneLower)) { currentSection = 'formations'; continue; }
+                        if (regexComp.test(ligneLower)) { currentSection = 'competences'; continue; }
+                        if (regexLang.test(ligneLower)) { currentSection = 'langues'; continue; }
+                    }
+
+                    // Ne pas ajouter le mail/tel dans le texte
+                    if (emailMatch && ligne.includes(emailMatch[0])) continue;
+                    if (telMatch && ligne.includes(telMatch[0])) continue;
+
+                    blocs[currentSection].push(ligne);
+                }
+
+                // 4. Affectation aux champs
+                if (blocs.profil.length > 0) cv.value.profil = blocs.profil.join('\n');
+                if (blocs.competences.length > 0) cv.value.competencesInput = blocs.competences.join(', ');
+
+                if (blocs.experiences.length > 0) {
+                    cv.value.experiences = [{ 
+                        poste: '--- À TRIER MANUELLEMENT ---', 
+                        entreprise: '', 
+                        periode: '', 
+                        description: blocs.experiences.join('\n') 
+                    }];
+                }
+
+                if (blocs.formations.length > 0) {
+                    cv.value.formations = [{ 
+                        diplome: blocs.formations.join(' | '), 
+                        ecole: '', 
+                        periode: '' 
+                    }];
+                }
+
+                const languesText = blocs.langues.join(' ').toLowerCase();
+                if (languesText) {
+                    const possibleLangs = ['Arabe', 'Français', 'Anglais', 'Tamazight', 'Espagnol', 'Allemand', 'Italien', 'Turc', 'Chinois'];
+                    let foundLangs = [];
+                    possibleLangs.forEach(pl => {
+                        if (languesText.includes(pl.toLowerCase())) {
+                            foundLangs.push({ nom: pl, niveau: 'Intermédiaire' });
+                        }
+                    });
+                    if (foundLangs.length > 0) cv.value.langues = foundLangs;
+                }
+
+                showImportCV.value = false;
+                texteImportCV.value = '';
+                alert("L'extraction intelligente a découpé le texte ! Veuillez vérifier et ajuster les cases manuellement.");
+            };
+
+            const telechargerCV = () => {
+                const element = document.getElementById('zone-cv');
+                const opt = {
+                    margin:       0,
+                    filename:     `CV_${cv.value.nom ? cv.value.nom.replace(/[^a-zA-Z0-9-]/g, '_') : 'profil'}.pdf`,
+                    image:        { type: 'jpeg', quality: 0.98 },
+                    html2canvas:  { scale: 2 },
+                    jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
+                };
+                html2pdf().set(opt).from(element).save();
+            };
+            // ------------------ //
+
+            const grouperCatalogue = (liste) => {
+                const groupes = {};
+                liste.forEach(s => {
+                    const cat = (s.categorie && s.categorie.trim() !== '') ? s.categorie.trim() : 'Autres (Sans catégorie)';
+                    if (!groupes[cat]) groupes[cat] = [];
+                    groupes[cat].push(s);
+                });
+                const groupesTries = {};
+                Object.keys(groupes).sort((a, b) => {
+                    if (a === 'Autres (Sans catégorie)') return 1;
+                    if (b === 'Autres (Sans catégorie)') return -1;
+                    return a.localeCompare(b);
+                }).forEach(key => {
+                    groupesTries[key] = groupes[key];
+                });
+                return groupesTries;
+            };
+
+            // CATALOGUE FACTURATION
+            const catalogueFacturation = ref([]);
+            const rechercheCatFacturation = ref('');
+            const formCatFacturation = ref({ id: null, nom: '', prix: null, categorie: '' });
+
+            const chargerCatFacturation = () => {
+                const data = localStorage.getItem('catalogue_facturation_v1');
+                if (data) catalogueFacturation.value = JSON.parse(data);
+            };
+
+            watch(catalogueFacturation, (newVals) => localStorage.setItem('catalogue_facturation_v1', JSON.stringify(newVals)), { deep: true });
+
+            const categoriesUniquesFacturation = computed(() => {
+                const set = new Set();
+                catalogueFacturation.value.forEach(s => {
+                    if (s.categorie && s.categorie.trim()) set.add(s.categorie.trim());
+                });
+                return Array.from(set).sort();
+            });
+
+            const catalogueFacturationFiltre = computed(() => {
+                const term = rechercheCatFacturation.value.toLowerCase();
+                if (!term) return catalogueFacturation.value;
+                return catalogueFacturation.value.filter(s => s.nom.toLowerCase().includes(term) || (s.categorie && s.categorie.toLowerCase().includes(term)));
+            });
+
+            const catalogueFacturationGroupeFiltre = computed(() => grouperCatalogue(catalogueFacturationFiltre.value));
+            const catalogueFacturationGroupeComplet = computed(() => grouperCatalogue(catalogueFacturation.value));
+
+            const sauvegarderCatFacturation = () => {
+                if (formCatFacturation.value.id) {
+                    const index = catalogueFacturation.value.findIndex(s => s.id === formCatFacturation.value.id);
+                    if (index !== -1) catalogueFacturation.value[index] = { ...formCatFacturation.value };
+                } else {
+                    catalogueFacturation.value.push({ ...formCatFacturation.value, id: Date.now() });
+                }
+                reinitialiserFormCatFacturation();
+            };
+
+            const editerCatFacturation = (s) => { formCatFacturation.value = { ...s }; };
+            const supprimerCatFacturation = (id) => { if(confirm("Supprimer du catalogue Facturation ?")) catalogueFacturation.value = catalogueFacturation.value.filter(s => s.id !== id); };
+            const reinitialiserFormCatFacturation = () => { formCatFacturation.value = { id: null, nom: '', prix: null, categorie: '' }; };
+
+            const appliquerServiceFacture = (article) => {
+                if (!article.catalogueId) return;
+                const service = catalogueFacturation.value.find(s => s.id === article.catalogueId);
+                if (service) {
+                    article.designation = service.nom;
+                    article.pu = service.prix;
+                }
+            };
+
+            // CATALOGUE CAISSE
+            const catalogueCaisse = ref([]);
+            const rechercheCatCaisse = ref('');
+            const formCatCaisse = ref({ id: null, nom: '', prix: null, categorie: '' });
+
+            const chargerCatCaisse = () => {
+                const data = localStorage.getItem('catalogue_caisse_v1');
+                if (data) catalogueCaisse.value = JSON.parse(data);
+            };
+
+            watch(catalogueCaisse, (newVals) => localStorage.setItem('catalogue_caisse_v1', JSON.stringify(newVals)), { deep: true });
+
+            const categoriesUniquesCaisse = computed(() => {
+                const set = new Set();
+                catalogueCaisse.value.forEach(s => {
+                    if (s.categorie && s.categorie.trim()) set.add(s.categorie.trim());
+                });
+                return Array.from(set).sort();
+            });
+
+            const catalogueCaisseFiltre = computed(() => {
+                const term = rechercheCatCaisse.value.toLowerCase();
+                if (!term) return catalogueCaisse.value;
+                return catalogueCaisse.value.filter(s => s.nom.toLowerCase().includes(term) || (s.categorie && s.categorie.toLowerCase().includes(term)));
+            });
+
+            const catalogueCaisseGroupeFiltre = computed(() => grouperCatalogue(catalogueCaisseFiltre.value));
+            const catalogueCaisseGroupeComplet = computed(() => grouperCatalogue(catalogueCaisse.value));
+
+            const sauvegarderCatCaisse = () => {
+                if (formCatCaisse.value.id) {
+                    const index = catalogueCaisse.value.findIndex(s => s.id === formCatCaisse.value.id);
+                    if (index !== -1) catalogueCaisse.value[index] = { ...formCatCaisse.value };
+                } else {
+                    catalogueCaisse.value.push({ ...formCatCaisse.value, id: Date.now() });
+                }
+                reinitialiserFormCatCaisse();
+            };
+
+            const editerCatCaisse = (s) => { formCatCaisse.value = { ...s }; };
+            const supprimerCatCaisse = (id) => { if(confirm("Supprimer du catalogue Caisse ?")) catalogueCaisse.value = catalogueCaisse.value.filter(s => s.id !== id); };
+            const reinitialiserFormCatCaisse = () => { formCatCaisse.value = { id: null, nom: '', prix: null, categorie: '' }; };
+
+            const calculerMontantCaisse = () => {
+                if (formCaisse.value.catalogueId) {
+                    const service = catalogueCaisse.value.find(s => s.id === formCaisse.value.catalogueId);
+                    if (service) {
+                        formCaisse.value.montant = service.prix * (formCaisse.value.quantite || 1);
+                    }
+                }
+            };
+
+            const vendeursListe = ref([]);
+            const rechercheVendeur = ref('');
+            const formVendeur = ref({ id: null, nom: '', activite: '', adresse: '', rc: '', nif: '', nis: '' });
+
+            const chargerVendeurs = () => {
+                const data = localStorage.getItem('repertoire_vendeurs_v2');
+                if (data) vendeursListe.value = JSON.parse(data);
+            };
+
+            watch(vendeursListe, (newVals) => localStorage.setItem('repertoire_vendeurs_v2', JSON.stringify(newVals)), { deep: true });
+
+            const vendeursFiltres = computed(() => {
+                const term = rechercheVendeur.value.toLowerCase();
+                if (!term) return vendeursListe.value;
+                return vendeursListe.value.filter(v => v.nom.toLowerCase().includes(term));
+            });
+
+            const sauvegarderVendeur = () => {
+                if (formVendeur.value.id) {
+                    const index = vendeursListe.value.findIndex(v => v.id === formVendeur.value.id);
+                    if (index !== -1) vendeursListe.value[index] = { ...formVendeur.value };
+                } else {
+                    vendeursListe.value.push({ ...formVendeur.value, id: Date.now() });
+                }
+                reinitialiserFormVendeur();
+            };
+
+            const editerVendeur = (v) => { formVendeur.value = { ...v }; };
+            const supprimerVendeur = (id) => { if(confirm("Supprimer ce profil ?")) vendeursListe.value = vendeursListe.value.filter(v => v.id !== id); };
+            const reinitialiserFormVendeur = () => { formVendeur.value = { id: null, nom: '', activite: '', adresse: '', rc: '', nif: '', nis: '' }; };
+            
+            const getNomVendeur = (id) => {
+                if (!id) return 'Global';
+                const v = vendeursListe.value.find(v => v.id === id);
+                return v ? v.nom : 'Inconnu';
+            };
+
+            const clientsListe = ref([]);
+            const rechercheClient = ref('');
+            const formClient = ref({ id: null, nom: '', telephone: '', adresse: '', rc: '', nif: '', nis: '', vendeurId: '' });
+            const dernieresFacturesClients = ref({});
+
+            const chargerClients = () => {
+                const data = localStorage.getItem('repertoire_clients_v2');
+                if (data) clientsListe.value = JSON.parse(data);
+                
+                const savedFactures = localStorage.getItem('dernieres_factures_clients_v1');
+                if (savedFactures) dernieresFacturesClients.value = JSON.parse(savedFactures);
+            };
+
+            watch(clientsListe, (newVals) => localStorage.setItem('repertoire_clients_v2', JSON.stringify(newVals)), { deep: true });
+
+            const clientsFiltres = computed(() => {
+                const term = rechercheClient.value.toLowerCase();
+                if (!term) return clientsListe.value;
+                return clientsListe.value.filter(c => c.nom.toLowerCase().includes(term) || (c.telephone && c.telephone.includes(term)));
+            });
+
+            const sauvegarderClient = () => {
+                if (formClient.value.id) {
+                    const index = clientsListe.value.findIndex(c => c.id === formClient.value.id);
+                    if (index !== -1) clientsListe.value[index] = { ...formClient.value };
+                } else {
+                    clientsListe.value.push({ ...formClient.value, id: Date.now() });
+                }
+                reinitialiserFormClient();
+            };
+
+            const editerClient = (clientObj) => { formClient.value = { ...clientObj }; };
+            const supprimerClient = (id) => { if(confirm("Supprimer ce client ?")) { clientsListe.value = clientsListe.value.filter(c => c.id !== id); } };
+            const reinitialiserFormClient = () => { formClient.value = { id: null, nom: '', telephone: '', adresse: '', rc: '', nif: '', nis: '', vendeurId: '' }; };
+
+            const vendeur = ref({ nom: 'ENTREPRISE', activite: '', adresse: '', rc: '', nif: '', nis: '' });
+            const facture = ref({ typeDocument: 'FACTURE', numero: '2026-001', dateLieu: 'Alger, le 05/10/2026', timbre: 1200, notes: '' });
+            const client = ref({ nom: '', adresse: '', rc: '', nif: '' });
+            
+            const vendeurSelectionneFacture = ref(""); 
+            const clientSelectionneFacture = ref(""); 
+            const listeFacturesArchivees = ref([]);
+            const rechercheArchive = ref('');
+            const filtreEntrepriseArchive = ref(''); 
+
+            const chargerArchivesFactures = () => {
+                const data = localStorage.getItem('archives_factures_v1');
+                if (data) listeFacturesArchivees.value = JSON.parse(data);
+            };
+
+            watch(listeFacturesArchivees, (newVals) => localStorage.setItem('archives_factures_v1', JSON.stringify(newVals)), { deep: true });
+
+            const facturesArchiveesFiltrees = computed(() => {
+                let resultat = listeFacturesArchivees.value;
+
+                if (filtreEntrepriseArchive.value) {
+                    resultat = resultat.filter(f => f.vendeur && f.vendeur.nom === filtreEntrepriseArchive.value);
+                }
+
+                const term = rechercheArchive.value.toLowerCase();
+                if (term) {
+                    resultat = resultat.filter(f => f.clientNom.toLowerCase().includes(term) || f.numero.toLowerCase().includes(term));
+                }
+
+                return resultat;
+            });
+
+            const enregistrerFactureLogiciel = () => {
+                if (!client.value.nom) {
+                    alert("Veuillez renseigner un client avant d'enregistrer la facture.");
+                    return;
+                }
+                
+                const nouvelleArchive = {
+                    id: Date.now(),
+                    typeDocument: facture.value.typeDocument,
+                    numero: facture.value.numero,
+                    dateLieu: facture.value.dateLieu,
+                    timbre: facture.value.timbre,
+                    notes: facture.value.notes,
+                    vendeur: JSON.parse(JSON.stringify(vendeur.value)),
+                    client: JSON.parse(JSON.stringify(client.value)),
+                    clientNom: client.value.nom,
+                    articles: JSON.parse(JSON.stringify(articles.value)),
+                    transport: JSON.parse(JSON.stringify(transport.value)),
+                    totalTTC: totalTTC.value
+                };
+                
+                listeFacturesArchivees.value.unshift(nouvelleArchive);
+                alert(`${facture.value.typeDocument} enregistrée avec succès !`);
+            };
+
+            const chargerEtOuvrirFacture = (f) => {
+                facture.value.typeDocument = f.typeDocument || 'FACTURE';
+                facture.value.numero = f.numero;
+                facture.value.dateLieu = f.dateLieu;
+                facture.value.timbre = f.timbre;
+                facture.value.notes = f.notes || '';
+                vendeur.value = JSON.parse(JSON.stringify(f.vendeur));
+                client.value = JSON.parse(JSON.stringify(f.client));
+                articles.value = JSON.parse(JSON.stringify(f.articles));
+                transport.value = JSON.parse(JSON.stringify(f.transport));
+                vueActuelle.value = 'facture';
+                window.scrollTo(0, 0); 
+            };
+
+            const supprimerFactureArchivee = (id) => {
+                if(confirm("Voulez-vous supprimer ce document des archives ?")) {
+                    listeFacturesArchivees.value = listeFacturesArchivees.value.filter(f => f.id !== id);
+                }
+            };
+
+            const appliquerVendeurFacture = () => {
+                if (!vendeurSelectionneFacture.value) return;
+                const vTrouve = vendeursListe.value.find(v => v.id === vendeurSelectionneFacture.value);
+                if (vTrouve) {
+                    vendeur.value.nom = vTrouve.nom;
+                    vendeur.value.activite = vTrouve.activite;
+                    vendeur.value.adresse = vTrouve.adresse;
+                    vendeur.value.rc = vTrouve.rc;
+                    vendeur.value.nif = vTrouve.nif;
+                    vendeur.value.nis = vTrouve.nis;
+                }
+                clientSelectionneFacture.value = "";
+                client.value = { nom: '', adresse: '', rc: '', nif: '' };
+            };
+
+            const clientsDuVendeurActuel = computed(() => {
+                if (!vendeurSelectionneFacture.value) return [];
+                return clientsListe.value.filter(c => c.vendeurId === vendeurSelectionneFacture.value || !c.vendeurId);
+            });
+
+            const appliquerClientFacture = () => {
+                if (!clientSelectionneFacture.value) {
+                    client.value = { nom: '', adresse: '', rc: '', nif: '' };
+                    articles.value = [{ designation: '', quantite: 1, pu: 0, catalogueId: '' }];
+                    return;
+                }
+                const clientTrouve = clientsListe.value.find(c => c.id === clientSelectionneFacture.value);
+                if (clientTrouve) {
+                    client.value.nom = clientTrouve.nom;
+                    client.value.adresse = clientTrouve.adresse || '';
+                    client.value.rc = clientTrouve.rc || '';
+                    client.value.nif = clientTrouve.nif || '';
+                }
+
+                if (dernieresFacturesClients.value[clientSelectionneFacture.value]) {
+                    articles.value = JSON.parse(JSON.stringify(dernieresFacturesClients.value[clientSelectionneFacture.value]));
+                } else {
+                    articles.value = [{ designation: '', quantite: 1, pu: 0, catalogueId: '' }];
+                }
+            };
+
+            const articles = ref([{ designation: '', quantite: 1, pu: 0, catalogueId: '' }]);
+            const transport = ref({ chauffeur: '', matricule: '', paiement: 'Espèce' });
+
+            const ajouterArticle = () => articles.value.push({ designation: '', quantite: 1, pu: 0, catalogueId: '' });
+            const supprimerArticle = (index) => articles.value.splice(index, 1);
+            const totalHT = computed(() => articles.value.reduce((total, art) => total + (art.quantite * art.pu), 0));
+            const totalTVA = computed(() => totalHT.value * 0.19);
+            const totalTTC = computed(() => totalHT.value + totalTVA.value + facture.value.timbre);
+            const formaterPrix = (val) => Number(val).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+            const nombreEnLettres = (num) => {
+                if (isNaN(num) || num === 0) return "zéro";
+                const unites = ['', 'un', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit', 'neuf', 'dix', 'onze', 'douze', 'treize', 'quatorze', 'quinze', 'seize', 'dix-sept', 'dix-huit', 'dix-neuf'];
+                const dizaines = ['', '', 'vingt', 'trente', 'quarante', 'cinquante', 'soixante', 'soixante-dix', 'quatre-vingt', 'quatre-vingt-dix'];
+
+                function convertirBloc(n) {
+                    if (n === 0) return '';
+                    if (n < 20) return unites[n];
+                    if (n < 100) {
+                        let d = Math.floor(n / 10);
+                        let u = n % 10;
+                        if (d === 7 || d === 9) {
+                            return dizaines[d - 1] + (u === 1 && d === 7 ? '-et-' : '-') + unites[10 + u];
+                        }
+                        return dizaines[d] + (u === 1 ? '-et-un' : (u > 0 ? '-' + unites[u] : (d === 8 ? 's' : '')));
+                    }
+                    if (n < 1000) {
+                        let c = Math.floor(n / 100);
+                        let reste = n % 100;
+                        let cText = (c === 1 ? 'cent' : unites[c] + ' cents');
+                        if (c > 1 && reste === 0) cText += 's';
+                        return cText + (reste > 0 ? ' ' + convertirBloc(reste) : '');
+                    }
+                    return '';
+                }
+
+                let partieEntiere = Math.floor(num);
+                let centimes = Math.round((num - partieEntiere) * 100);
+
+                let resultat = '';
+                if (partieEntiere >= 1000000) {
+                    let millions = Math.floor(partieEntiere / 1000000);
+                    resultat += (millions === 1 ? 'un million ' : convertirBloc(millions) + ' millions ');
+                    partieEntiere %= 1000000;
+                }
+                if (partieEntiere >= 1000) {
+                    let milliers = Math.floor(partieEntiere / 1000);
+                    resultat += (milliers === 1 ? 'mille ' : convertirBloc(milliers) + ' mille ');
+                    partieEntiere %= 1000;
+                }
+                if (partieEntiere > 0) {
+                    resultat += convertirBloc(partieEntiere);
+                }
+
+                resultat = resultat.trim() + ' dinars';
+                if (centimes > 0) {
+                    resultat += ' et ' + convertirBloc(centimes) + ' centimes';
+                } else {
+                    resultat += ' et zéro centime';
+                }
+
+                return resultat.charAt(0).toUpperCase() + resultat.slice(1);
+            };
+
+            const montantEnLettres = computed(() => nombreEnLettres(totalTTC.value));
+
+            const exporterWord = () => {
+                if (clientSelectionneFacture.value) {
+                    dernieresFacturesClients.value[clientSelectionneFacture.value] = JSON.parse(JSON.stringify(articles.value));
+                    localStorage.setItem('dernieres_factures_clients_v1', JSON.stringify(dernieresFacturesClients.value));
+                }
+
+                const element = document.getElementById('zone-facture').innerHTML;
+                const styles = `<style>body{font-family:Arial,sans-serif;color:#000;}h1{font-size:20px;font-weight:bold;margin:0 0 5px 0;}h2{font-size:16px;font-weight:normal;margin:0 0 10px 0;text-decoration:underline;}table{width:100%;border-collapse:collapse;margin-bottom:20px;font-size:13px;text-align:center;}th,td{border:1px solid #000;padding:8px;}th{background-color:#f9f9f9;font-weight:bold;}.text-left{text-align:left;}.text-right{text-align:right;}.client-box{border:2px solid #000;padding:15px;width:50%;margin-left:auto;margin-bottom:30px;font-size:13px;}</style>`;
+                const header = "<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>Document</title>" + styles + "</head><body>";
+                const footer = "</body></html>";
+                const blob = new Blob(['\ufeff', header + element + footer], { type: 'application/msword' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `${facture.value.typeDocument}_${facture.value.numero ? facture.value.numero.replace(/[^a-zA-Z0-9-]/g, '_') : 'entreprise'}.doc`;
+                document.body.appendChild(link); link.click(); document.body.removeChild(link); URL.revokeObjectURL(url);
+            };
+
+            const getDateDuJourLocal = () => {
+                const tzoffset = (new Date()).getTimezoneOffset() * 60000; 
+                return (new Date(Date.now() - tzoffset)).toISOString().split('T')[0];
+            };
+
+            const transactions = ref([]);
+            const moisSelectionne = ref(new Date().toISOString().substring(0, 7));
+            const parametresEmployes = ref({});
+            const formCaisse = ref({ employe: '', type: 'rentree', montant: null, date: getDateDuJourLocal(), catalogueId: '', quantite: 1 });
+
+            // FIX: Initialisation sécurisée en dehors des méthodes calculées
+            const initParametresEmploye = (nom) => {
+                if (!parametresEmployes.value[nom]) { 
+                    parametresEmployes.value[nom] = { commission: 50, contributionFraisVariables: 0, contributionFraisFixes: 0 }; 
+                } else {
+                    if (parametresEmployes.value[nom].contributionFraisVariables === undefined) {
+                        parametresEmployes.value[nom].contributionFraisVariables = parametresEmployes.value[nom].contributionFrais || 0;
+                        parametresEmployes.value[nom].contributionFraisFixes = 0;
+                    }
+                }
+            };
+
+            onMounted(() => {
+                if (localStorage.getItem('theme_nuit') === 'true') {
+                    isDarkMode.value = true;
+                    document.body.classList.add('dark-theme');
+                }
+
+                chargerVendeurs();
+                chargerClients(); 
+                chargerArchivesFactures();
+                chargerArchivesCV();
+                
+                const savedCV = localStorage.getItem('mon_cv_v1');
+                if (savedCV) {
+                    let parsedCV = JSON.parse(savedCV);
+                    if (!parsedCV.langues) {
+                        parsedCV.langues = [{ nom: '', niveau: '' }];
+                        if (parsedCV.languesInput) {
+                            const oldLangs = parsedCV.languesInput.split(',').filter(s => s.trim() !== '');
+                            if (oldLangs.length > 0) {
+                                parsedCV.langues = oldLangs.map(l => ({ nom: l.trim(), niveau: 'Courant' }));
+                            }
+                        }
+                    }
+                    if (parsedCV.photo === undefined) parsedCV.photo = '';
+                    cv.value = parsedCV;
+                }
+
+                const ancienCatalogue = localStorage.getItem('catalogue_services_v1');
+                if (ancienCatalogue) {
+                    if (!localStorage.getItem('catalogue_facturation_v1')) localStorage.setItem('catalogue_facturation_v1', ancienCatalogue);
+                    if (!localStorage.getItem('catalogue_caisse_v1')) localStorage.setItem('catalogue_caisse_v1', ancienCatalogue);
+                    localStorage.removeItem('catalogue_services_v1');
+                }
+
+                chargerCatFacturation();
+                chargerCatCaisse();
+                
+                const savedParams = localStorage.getItem('parametres_employes_v7');
+                if (savedParams) {
+                    parametresEmployes.value = JSON.parse(savedParams);
+                } else {
+                    const oldParams = localStorage.getItem('parametres_employes_v6');
+                    if (oldParams) {
+                        let parsed = JSON.parse(oldParams);
+                        for(let k in parsed) {
+                            parsed[k].contributionFraisVariables = parsed[k].contributionFrais || 0;
+                            parsed[k].contributionFraisFixes = 0;
+                        }
+                        parametresEmployes.value = parsed;
+                    }
+                }
+
+                // FIX: On charge les transactions et on force la création des paramètres employés AVANT tout calcul
+                const data = localStorage.getItem('caisse_employes_v11');
+                if (data) {
+                    transactions.value = JSON.parse(data);
+                    transactions.value.forEach(tx => initParametresEmploye(tx.employe));
+                }
+                
+                const dernierEmploye = localStorage.getItem('dernier_employe');
+                if (dernierEmploye) formCaisse.value.employe = dernierEmploye;
+            });
+
+            watch(transactions, (newVals) => localStorage.setItem('caisse_employes_v11', JSON.stringify(newVals)), { deep: true });
+            watch(parametresEmployes, (newVals) => localStorage.setItem('parametres_employes_v7', JSON.stringify(newVals)), { deep: true }); 
+
+            const getServiceInfo = (tx) => {
+                if (tx.serviceNom) return tx.serviceNom;
+                if (tx.catalogueId) {
+                    const s = catalogueCaisse.value.find(x => x.id === tx.catalogueId);
+                    if (s) return s.nom;
+                }
+                return 'Vente Divers';
+            };
+
+            const listeMois = computed(() => {
+                const setMois = new Set([new Date().toISOString().substring(0, 7)]);
+                transactions.value.forEach(t => setMois.add(t.date.split('T')[0].substring(0, 7)));
+                return Array.from(setMois).sort().reverse().map(m => {
+                    const d = new Date(m.split('-')[0], m.split('-')[1] - 1);
+                    return { valeur: m, label: d.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }) };
+                });
+            });
+
+            const transactionsFiltrees = computed(() => {
+                if (moisSelectionne.value === 'tous') return [...transactions.value].sort((a, b) => new Date(b.date) - new Date(a.date));
+                return transactions.value.filter(t => t.date.startsWith(moisSelectionne.value)).sort((a, b) => new Date(b.date) - new Date(a.date));
+            });
+
+            const joursDuMois = computed(() => {
+                if (moisSelectionne.value === 'tous') return [];
+                const [yearStr, monthStr] = moisSelectionne.value.split('-');
+                const year = parseInt(yearStr); const month = parseInt(monthStr) - 1;
+                const firstDay = new Date(year, month, 1); const lastDay = new Date(year, month + 1, 0);
+                let startPadding = firstDay.getDay() - 1; if (startPadding === -1) startPadding = 6; 
+                const totauxParJour = {};
+                transactionsFiltrees.value.forEach(tx => {
+                    if (tx.type === 'frais_fixe') return; 
+                    
+                    const dStr = tx.date.split('T')[0];
+                    if (!totauxParJour[dStr]) totauxParJour[dStr] = { rentrees: 0, sorties: 0 };
+                    if (tx.type === 'rentree') totauxParJour[dStr].rentrees += tx.montant; else totauxParJour[dStr].sorties += tx.montant;
+                });
+                const daysArray = [];
+                for (let i = 0; i < startPadding; i++) { daysArray.push({ vide: true }); }
+                for (let d = 1; d <= lastDay.getDate(); d++) {
+                    const dateStr = `${yearStr}-${monthStr}-${String(d).padStart(2, '0')}`;
+                    const totaux = totauxParJour[dateStr] || { rentrees: 0, sorties: 0 };
+                    daysArray.push({ vide: false, jour: d, dateStr: dateStr, rentrees: totaux.rentrees, sorties: totaux.sorties });
+                }
+                return daysArray;
+            });
+
+            const fraisFixesDuMois = computed(() => {
+                return transactionsFiltrees.value.filter(t => t.type === 'frais_fixe').sort((a, b) => new Date(b.date) - new Date(a.date));
+            });
+
+            const historiqueParJour = computed(() => {
+                const groupes = {};
+                transactionsFiltrees.value.forEach(tx => {
+                    if (tx.type === 'frais_fixe') return; 
+
+                    const dateDuJour = tx.date.split('T')[0]; 
+                    if (!groupes[dateDuJour]) {
+                        const label = new Date(dateDuJour).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+                        groupes[dateDuJour] = { dateStr: dateDuJour, labelDate: label, totalRentrees: 0, totalSorties: 0, operations: [] };
+                    }
+                    groupes[dateDuJour].operations.push(tx);
+                    if (tx.type === 'rentree') groupes[dateDuJour].totalRentrees += tx.montant; else groupes[dateDuJour].totalSorties += tx.montant;
+                });
+                return Object.values(groupes).sort((a, b) => b.dateStr.localeCompare(a.dateStr));
+            });
+
+            const totalRentreesCaisse = computed(() => transactionsFiltrees.value.filter(t => t.type === 'rentree').reduce((s, t) => s + t.montant, 0));
+            const totalFraisVariablesCaisse = computed(() => transactionsFiltrees.value.filter(t => t.type === 'frais' || t.type === 'frais_variable').reduce((s, t) => s + t.montant, 0));
+            const totalFraisFixesCaisse = computed(() => transactionsFiltrees.value.filter(t => t.type === 'frais_fixe').reduce((s, t) => s + t.montant, 0));
+            const totalFraisCaisse = computed(() => totalFraisVariablesCaisse.value + totalFraisFixesCaisse.value);
+            const totalRetraitsCaisse = computed(() => transactionsFiltrees.value.filter(t => t.type === 'retrait').reduce((s, t) => s + t.montant, 0));
+            const soldeCaisse = computed(() => totalRentreesCaisse.value - totalFraisCaisse.value - totalRetraitsCaisse.value);
+
+            // VARIABLES POUR LE MENU ANALYTIQUE (ACCUEIL)
+            const totalServicesGlobal = computed(() => {
+                return transactions.value.filter(t => t.type === 'rentree').reduce((s, t) => s + (t.quantite || 1), 0);
+            });
+            const chiffreAffairesGlobal = computed(() => {
+                return transactions.value.filter(t => t.type === 'rentree').reduce((s, t) => s + t.montant, 0);
+            });
+
+            const bilanParEmploye = computed(() => {
+                const bilan = {};
+                transactionsFiltrees.value.forEach(tx => {
+                    // FIX BUG CAISSE: On ne modifie plus l'état externe 'parametresEmployes' à l'intérieur du computed
+                    if (!bilan[tx.employe]) { 
+                        bilan[tx.employe] = { nom: tx.employe, rentrees: 0, retraits: 0 }; 
+                    }
+                    if (tx.type === 'rentree') bilan[tx.employe].rentrees += tx.montant;
+                    if (tx.type === 'retrait') bilan[tx.employe].retraits += tx.montant;
+                });
+                
+                return Object.values(bilan).map(emp => {
+                    const params = parametresEmployes.value[emp.nom] || { commission: 50, contributionFraisVariables: 0, contributionFraisFixes: 0 };
+                    
+                    emp.commissionPct = params.commission || 0;
+                    emp.contributionVarPct = params.contributionFraisVariables || 0;
+                    emp.contributionFixePct = params.contributionFraisFixes || 0;
+                    
+                    emp.partVentes = emp.rentrees * (emp.commissionPct / 100);
+                    
+                    emp.partFraisVariables = totalFraisVariablesCaisse.value * (emp.contributionVarPct / 100);
+                    emp.partFraisFixes = totalFraisFixesCaisse.value * (emp.contributionFixePct / 100);
+                    emp.partFraisTotal = emp.partFraisVariables + emp.partFraisFixes;
+                    
+                    emp.resteAPayer = emp.partVentes - emp.partFraisTotal - emp.retraits;
+                    return emp;
+                }).sort((a, b) => b.rentrees - a.rentrees);
+            });
+
+            const enregistrerAction = () => {
+                if (!formCaisse.value.employe || formCaisse.value.montant <= 0 || !formCaisse.value.date) return;
+                let dateFinale;
+                if (formCaisse.value.date === getDateDuJourLocal()) {
+                    const tzoffset = (new Date()).getTimezoneOffset() * 60000;
+                    dateFinale = (new Date(Date.now() - tzoffset)).toISOString();
+                } else { dateFinale = formCaisse.value.date + 'T12:00:00.000Z'; }
+                
+                const nomEmploye = formCaisse.value.employe.trim().toUpperCase();
+                
+                let sNom = 'Vente Divers';
+                let sCat = 'Sans catégorie';
+                if (formCaisse.value.catalogueId) {
+                    const serv = catalogueCaisse.value.find(x => x.id === formCaisse.value.catalogueId);
+                    if (serv) { sNom = serv.nom; sCat = serv.categorie || 'Sans catégorie'; }
+                }
+
+                transactions.value.push({ 
+                    id: Date.now(), 
+                    date: dateFinale, 
+                    employe: nomEmploye, 
+                    type: formCaisse.value.type, 
+                    montant: formCaisse.value.montant,
+                    catalogueId: formCaisse.value.catalogueId || '',
+                    serviceNom: sNom,
+                    categorieNom: sCat,
+                    quantite: formCaisse.value.type === 'rentree' ? (formCaisse.value.quantite || 1) : 1
+                });
+                
+                initParametresEmploye(nomEmploye);
+                localStorage.setItem('dernier_employe', nomEmploye);
+                formCaisse.value.montant = null; formCaisse.value.type = 'rentree'; formCaisse.value.date = getDateDuJourLocal();
+                formCaisse.value.catalogueId = ''; formCaisse.value.quantite = 1;
+            };
+
+            const supprimerTx = (id) => { if(confirm("Effacer cette opération ?")) { transactions.value = transactions.value.filter(t => t.id !== id); } };
+            const formaterPrixCourt = (val) => { if (val >= 1000000) return (val/1000000).toFixed(1) + 'M'; if (val >= 1000) return (val/1000).toFixed(1) + 'k'; return val; };
+            const formaterHeure = (iso) => { try { return new Date(iso).toLocaleTimeString('fr-FR', { hour: '2-digit', minute:'2-digit' }); } catch { return ''; } };
+
+            const periodeChart2 = ref('mois');
+            let chart1Instance = null;
+            let chart2Instance = null;
+
+            const renderCharts = () => {
+                if (vueActuelle.value !== 'analytique') return;
+                
+                setTimeout(() => {
+                    const ctx1 = document.getElementById('chart1');
+                    const ctx2 = document.getElementById('chart2');
+                    if (!ctx1 || !ctx2) return;
+
+                    if (chart1Instance) chart1Instance.destroy();
+                    if (chart2Instance) chart2Instance.destroy();
+
+                    const textColor = isDarkMode.value ? '#e5e7eb' : '#374151';
+                    const rentrees = transactions.value.filter(t => t.type === 'rentree').sort((a, b) => new Date(a.date) - new Date(b.date));
+
+                    const counts = {};
+                    rentrees.forEach(tx => {
+                        const serviceName = getServiceInfo(tx);
+                        if (!counts[serviceName]) counts[serviceName] = 0;
+                        counts[serviceName] += (tx.quantite || 1);
+                    });
+
+                    chart1Instance = new Chart(ctx1, {
+                        type: 'doughnut',
+                        data: {
+                            labels: Object.keys(counts),
+                            datasets: [{
+                                data: Object.values(counts),
+                                backgroundColor: ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16']
+                            }]
+                        },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            plugins: { legend: { position: 'right', labels: { color: textColor } } }
+                        }
+                    });
+
+                    const revenues = {};
+                    const servicesSet = new Set();
+                    
+                    rentrees.forEach(tx => {
+                        const dateStr = periodeChart2.value === 'mois' 
+                            ? tx.date.substring(0, 7) 
+                            : tx.date.substring(0, 10); 
+                            
+                        const serviceName = getServiceInfo(tx);
+                        
+                        servicesSet.add(serviceName);
+                        if (!revenues[dateStr]) revenues[dateStr] = {};
+                        if (!revenues[dateStr][serviceName]) revenues[dateStr][serviceName] = 0;
+                        revenues[dateStr][serviceName] += tx.montant;
+                    });
+
+                    const labels2 = Object.keys(revenues);
+                    const datasets2 = [];
+                    const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16'];
+                    let colorIdx = 0;
+                    
+                    servicesSet.forEach(serviceName => {
+                        const data = labels2.map(date => revenues[date][serviceName] || 0);
+                        datasets2.push({
+                            label: serviceName,
+                            data: data,
+                            backgroundColor: colors[colorIdx % colors.length],
+                        });
+                        colorIdx++;
+                    });
+
+                    chart2Instance = new Chart(ctx2, {
+                        type: 'bar',
+                        data: { labels: labels2, datasets: datasets2 },
+                        options: {
+                            responsive: true, maintainAspectRatio: false,
+                            scales: {
+                                x: { stacked: true, ticks: { color: textColor } },
+                                y: { stacked: true, ticks: { color: textColor } }
+                            },
+                            plugins: { legend: { labels: { color: textColor } } }
+                        }
+                    });
+                }, 100);
+            };
+
+            watch(vueActuelle, (val) => { if(val === 'analytique') renderCharts(); });
+            watch(isDarkMode, () => { if(vueActuelle.value === 'analytique') renderCharts(); });
+            watch(transactions, () => { if(vueActuelle.value === 'analytique') renderCharts(); }, {deep: true});
+
+            return { 
+                vueActuelle, formaterPrix, retourArriere, titreBarreNavigation,
+                isDarkMode, toggleTheme,
+                showExportMenu, imprimerFacture, telechargerPDF, telechargerWord,
+                getServiceInfo, exporterDonnees, importerDonnees,
+                
+                // Exposer les variables du module CV
+                cv, listCompetences, telechargerCV, chargerPhotoCV,
+                listeCVArchivees, rechercheArchiveCV, listeCVArchiveesFiltrees,
+                sauvegarderCVArchive, chargerCVArchive, supprimerCVArchive, formaterDateArchive,
+                showImportCV, texteImportCV, importerTexteCV,
+
+                catalogueFacturation, rechercheCatFacturation, formCatFacturation, catalogueFacturationFiltre,
+                categoriesUniquesFacturation, catalogueFacturationGroupeFiltre, catalogueFacturationGroupeComplet,
+                sauvegarderCatFacturation, editerCatFacturation, supprimerCatFacturation, reinitialiserFormCatFacturation, appliquerServiceFacture,
+
+                catalogueCaisse, rechercheCatCaisse, formCatCaisse, catalogueCaisseFiltre,
+                categoriesUniquesCaisse, catalogueCaisseGroupeFiltre, catalogueCaisseGroupeComplet,
+                sauvegarderCatCaisse, editerCatCaisse, supprimerCatCaisse, reinitialiserFormCatCaisse, calculerMontantCaisse,
+
+                vendeursListe, rechercheVendeur, formVendeur, vendeursFiltres,
+                sauvegarderVendeur, editerVendeur, supprimerVendeur, reinitialiserFormVendeur, getNomVendeur,
+                clientsListe, rechercheClient, formClient, clientsFiltres,
+                sauvegarderClient, editerClient, supprimerClient, reinitialiserFormClient,
+                vendeur, facture, client, clientSelectionneFacture, appliquerClientFacture, 
+                vendeurSelectionneFacture, appliquerVendeurFacture, clientsDuVendeurActuel,
+                articles, transport, ajouterArticle, supprimerArticle, totalHT, totalTVA, totalTTC, montantEnLettres, exporterWord,
+                enregistrerFactureLogiciel, listeFacturesArchivees, chargerEtOuvrirFacture, supprimerFactureArchivee,
+                rechercheArchive, facturesArchiveesFiltrees, filtreEntrepriseArchive,
+                transactions, moisSelectionne, listeMois, historiqueParJour, formCaisse, joursDuMois, parametresEmployes, 
+                totalRentreesCaisse, totalFraisCaisse, totalFraisFixesCaisse, totalFraisVariablesCaisse, fraisFixesDuMois, 
+                totalRetraitsCaisse, soldeCaisse, bilanParEmploye, enregistrerAction, 
+                
+                totalServicesGlobal, chiffreAffairesGlobal, periodeChart2, renderCharts,
+                
+                supprimerTx, formaterPrixCourt, formaterHeure 
+            }
+        }
+    }).mount('#app');
+</script>
+</body>
+</html>
